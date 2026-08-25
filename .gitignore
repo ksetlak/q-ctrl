@@ -4,3 +4,6 @@ NOTES.md
 # Q-CTRL compiled binary (platform-specific, not committed)
 qctrl-app
 qctrl-app.exe
+
+# Debug log written by `just run`
+qctrl-debug.log

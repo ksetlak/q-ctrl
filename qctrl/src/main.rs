@@ -2,7 +2,7 @@ mod ticket;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use ticket::{create_ticket, load_tickets, next_ticket_id, reorder_ticket, write_fields, write_status_and_order, EditFields, Ticket};
+use ticket::{create_ticket, load_tickets, next_ticket_id, order_for_drop, reorder_ticket, write_fields, write_status_and_order, EditFields, Ticket};
 use log::{debug, info, warn};
 
 slint::include_modules!();
@@ -76,9 +76,19 @@ fn infer_project_key(tickets: &[Ticket]) -> String {
 }
 
 fn main() {
+    // Always write logs to qctrl-debug.log next to the binary, regardless of
+    // how the app was launched (Finder, terminal, just run, etc.).
+    let log_path = repo_root().join("qctrl-debug.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(&log_path)
+        .expect("Cannot open log file");
+
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("debug")
-    ).init();
+    )
+    .target(env_logger::Target::Pipe(Box::new(log_file)))
+    .init();
 
     info!("Scaffold Backlog starting");
 
@@ -230,14 +240,17 @@ fn main() {
             let ticket_path = items_dir_c.join(format!("{}.md", dragged_id));
 
             if is_cross_column {
-                // Cross-column: write status + reset order to 0.0 (bottom sentinel)
+                // Cross-column: compute the correct order for the drop position,
+                // then write status + order together.
+                let new_order = order_for_drop(&after_id, &dragged_id, &column_tickets);
                 info!(
-                    "Cross-column drop: {} → status {} (was {})",
-                    dragged_id, column_status, current_status
+                    "Cross-column drop: {} → status {} (was {}), order={:.6}, after={:?}",
+                    dragged_id, column_status, current_status, new_order,
+                    if after_id.is_empty() { "<top>" } else { &after_id }
                 );
-                match write_status_and_order(&ticket_path, &column_status, 0.0) {
+                match write_status_and_order(&ticket_path, &column_status, new_order) {
                     Ok(()) => {
-                        info!("Status changed: {} → {}", dragged_id, column_status);
+                        info!("Status+order written: {} → {} @ {:.6}", dragged_id, column_status, new_order);
                         let fresh = load_tickets(&items_dir_c);
                         *tickets_c.lock().unwrap() = fresh;
                         populate_board(&app, &tickets_c.lock().unwrap());

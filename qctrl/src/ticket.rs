@@ -383,6 +383,31 @@ pub fn reorder_ticket(
     Ok(new_order)
 }
 
+/// Return the `order` value a ticket should receive when dropped after `after_id`
+/// in a target column. Pass the target column's current tickets (the dragged
+/// ticket may or may not be among them — it is excluded before computing).
+/// `after_id` empty means "insert at top".
+pub fn order_for_drop(after_id: &str, dragged_id: &str, column_tickets: &[Ticket]) -> f64 {
+    let others: Vec<&Ticket> = column_tickets
+        .iter()
+        .filter(|t| t.frontmatter.id != dragged_id)
+        .collect();
+
+    let insert_after_idx: Option<usize> = if after_id.is_empty() {
+        None
+    } else {
+        let pos = others.iter().position(|t| t.frontmatter.id == after_id);
+        if pos.is_none() {
+            // after_id not found in target column — it came from the source column.
+            // Insert at bottom (after last card).
+            return compute_order(&others, others.len().checked_sub(1)).unwrap_or(1.0);
+        }
+        pos
+    };
+
+    compute_order(&others, insert_after_idx).unwrap_or(1.0)
+}
+
 /// Compute the midpoint order value for inserting after `others[insert_after_idx]`.
 /// `insert_after_idx = None` means insert at the top.
 fn compute_order(others: &[&Ticket], insert_after_idx: Option<usize>) -> Result<f64, String> {

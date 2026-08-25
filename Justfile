@@ -27,6 +27,6 @@ release:
     cp {{src_dir}}/target/release/{{bin_name}} {{dest}}
     @echo "Binary copied to: {{dest}}"
 
-# Build (debug) and launch immediately from repo root
+# Build (debug) and launch immediately from repo root, tee logs to qctrl-debug.log
 run: build
-    {{dest}}
+    {{dest}} 2>&1 | tee qctrl-debug.log

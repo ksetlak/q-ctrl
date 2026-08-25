@@ -18,7 +18,7 @@ component TicketCard inherits Rectangle {
 
     callback card-pressed(string, length, length);
     callback card-moved(length, length);
-    callback card-released(length, length);
+    callback card-released(length, length, string);
 
     border-radius: 6px;
     border-width: 1px;
@@ -78,7 +78,8 @@ component TicketCard inherits Rectangle {
             } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
                 card-released(
                     self.mouse-x + root.absolute-position.x,
-                    self.mouse-y + root.absolute-position.y
+                    self.mouse-y + root.absolute-position.y,
+                    "" // after-id is filled in by KanbanColumn's forwarding handler
                 );
             }
         }
@@ -122,17 +123,32 @@ component KanbanColumn inherits Rectangle {
     in property <string> column-title;
     in property <[TicketData]> tickets;
     in property <string> dragged-id: "";
-    in property <length> drag-y: -1px;
     in property <bool> is-hover: false;
+    // Absolute drag-y from window, already adjusted for board scroll.
+    in property <length> drag-y: -1px;
+
+    // Scroll offset of this column's inner ScrollView (negative when scrolled down).
+    private property <length> sv-viewport-y: 0px;
+
+    // Cards area starts 38px from the column top:
+    //   VerticalLayout padding (8) + header height (20) + spacing (8) + inner padding (2) = 38px
+    private property <length> cards-area-top: self.absolute-position.y + 38px;
+
+    // local-y: drag position relative to the top of the cards area, plus scroll offset.
+    private property <length> local-y: drag-y - cards-area-top - sv-viewport-y;
 
     pure function card-slot-height() -> length { 88px + 6px }
     pure function drop-index() -> int {
-        max(0, min(tickets.length, floor(drag-y / card-slot-height())))
+        max(0, min(tickets.length, floor(local-y / card-slot-height())))
+    }
+    pure public function after-id() -> string {
+        drop-index() == 0 ? "" : tickets[drop-index() - 1].id
     }
 
     callback card-pressed(string, length, length);
     callback card-moved(length, length);
-    callback card-released(length, length);
+    // Third arg is the after-id computed at drop time.
+    callback card-released(length, length, string);
 
     width: 220px;
     border-radius: 8px;
@@ -163,6 +179,7 @@ component KanbanColumn inherits Rectangle {
 
         ScrollView {
             vertical-stretch: 1;
+            viewport-y <=> root.sv-viewport-y;
 
             VerticalLayout {
                 spacing: 6px;
@@ -192,7 +209,7 @@ component KanbanColumn inherits Rectangle {
                         drag-active: dragged-id != "";
                         card-pressed(id, ax, ay) => { root.card-pressed(id, ax, ay); }
                         card-moved(ax, ay)        => { root.card-moved(ax, ay); }
-                        card-released(ax, ay)     => { root.card-released(ax, ay); }
+                        card-released(ax, ay)     => { root.card-released(ax, ay, root.after-id()); }
                     }
 
                     if is-hover && dragged-id != "" && drop-index() == i + 1 : Rectangle {
@@ -203,6 +220,7 @@ component KanbanColumn inherits Rectangle {
                 }
             }
         }
+
     }
 }
 
@@ -460,6 +478,10 @@ export component AppWindow inherits Window {
     in property <string> dialog-next-id: "";
     in property <string> dialog-error: "";
 
+    // --- Board scroll state (tracks the outer board ScrollView offsets) ---
+    private property <length> board-scroll-x: 0px;
+    private property <length> board-scroll-y: 0px;
+
     // --- Drag state ---
     private property <string> drag-id: "";
     private property <length> drag-x: 0px;
@@ -467,6 +489,8 @@ export component AppWindow inherits Window {
     private property <length> drag-start-x: 0px;
     private property <length> drag-start-y: 0px;
     private property <string> drag-hover-col: "";
+    // after-id from the currently hovered column — updated on every card-moved.
+    private property <string> drag-after-id: "";
 
     // --- Edit dialog state ---
     in-out property <bool> edit-visible: false;
@@ -503,13 +527,28 @@ export component AppWindow inherits Window {
     }
 
     pure function col-for-x(x: length) -> string {
-        x < 250px  ? "OPEN" :
-        x < 480px  ? "READY" :
-        x < 710px  ? "ON-HOLD" :
-        x < 940px  ? "IN PROGRESS" :
-        x < 1170px ? "AWAITING OPERATOR" :
-        x < 1400px ? "CANCELED" :
+        // Adjust for board horizontal scroll so column detection stays correct
+        // when the user has scrolled the board right.
+        (x - board-scroll-x) < 250px  ? "OPEN" :
+        (x - board-scroll-x) < 480px  ? "READY" :
+        (x - board-scroll-x) < 710px  ? "ON-HOLD" :
+        (x - board-scroll-x) < 940px  ? "IN PROGRESS" :
+        (x - board-scroll-x) < 1170px ? "AWAITING OPERATOR" :
+        (x - board-scroll-x) < 1400px ? "CANCELED" :
         "DONE"
+    }
+
+    // Returns after-id() from whichever column is currently hovered.
+    // Called at card-released time so it always reflects the TARGET column,
+    // not the source column whose TouchArea fired the event.
+    pure function hovered-after-id() -> string {
+        drag-hover-col == "OPEN"              ? col-open.after-id() :
+        drag-hover-col == "READY"             ? col-ready.after-id() :
+        drag-hover-col == "ON-HOLD"           ? col-onhold.after-id() :
+        drag-hover-col == "IN PROGRESS"       ? col-inprogress.after-id() :
+        drag-hover-col == "AWAITING OPERATOR" ? col-awaiting.after-id() :
+        drag-hover-col == "CANCELED"          ? col-canceled.after-id() :
+        col-done.after-id()
     }
 
     pure function col-drag-y(y: length) -> length {
@@ -545,130 +584,104 @@ export component AppWindow inherits Window {
             }
         }
 
-        ScrollView {
+        board-scroll := ScrollView {
             vertical-stretch: 1;
+            viewport-x <=> board-scroll-x;
+            viewport-y <=> board-scroll-y;
 
             HorizontalLayout {
                 spacing: 10px;
                 alignment: start;
                 padding: 4px;
 
-                KanbanColumn {
+                col-open := KanbanColumn {
                     column-title: "OPEN";              tickets: tickets-open;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "OPEN";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "OPEN";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-open.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-ready := KanbanColumn {
                     column-title: "READY";             tickets: tickets-ready;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "READY";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "READY";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-ready.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-onhold := KanbanColumn {
                     column-title: "ON-HOLD";           tickets: tickets-on-hold;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "ON-HOLD";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "ON-HOLD";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-onhold.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-inprogress := KanbanColumn {
                     column-title: "IN PROGRESS";       tickets: tickets-in-progress;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "IN PROGRESS";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "IN PROGRESS";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-inprogress.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-awaiting := KanbanColumn {
                     column-title: "AWAITING OPERATOR"; tickets: tickets-awaiting;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "AWAITING OPERATOR";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "AWAITING OPERATOR";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-awaiting.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-canceled := KanbanColumn {
                     column-title: "CANCELED";          tickets: tickets-canceled;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "CANCELED";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "CANCELED";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-canceled.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
-                KanbanColumn {
+                col-done := KanbanColumn {
                     column-title: "DONE";              tickets: tickets-done;
-                    dragged-id: drag-id;   is-hover: drag-hover-col == "DONE";
-                    drag-y: col-drag-y(drag-y);
-                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
-                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
-                    card-released(ax, ay)      => {
+                    dragged-id: drag-id;   drag-y: drag-y - board-scroll-y;   is-hover: drag-hover-col == "DONE";
+                    card-pressed(id, ax, ay) => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)       => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); drag-after-id = col-done.after-id(); }
+                    card-released(ax, ay, after) => {
                         if drag-id != "" {
-                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
-                                card-clicked(drag-id);
-                            } else {
-                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
-                            }
-                            drag-id = ""; drag-hover-col = "";
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px { card-clicked(drag-id); }
+                            else { reorder-ticket(drag-id, hovered-after-id(), col-status(col-for-x(ax))); }
+                            drag-id = ""; drag-hover-col = ""; drag-after-id = "";
                         }
                     }
                 }
