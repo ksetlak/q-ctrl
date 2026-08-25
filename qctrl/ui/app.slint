@@ -1,0 +1,715 @@
+import { VerticalBox, ScrollView, HorizontalBox, LineEdit, ComboBox, TextEdit, Palette } from "std-widgets.slint";
+
+export struct TicketData {
+    id: string,
+    title: string,
+    status: string,
+    priority: string,
+    ticket-type: string,
+    milestone: string,
+    body: string,
+    priority-colour: color,
+}
+
+component TicketCard inherits Rectangle {
+    in property <TicketData> ticket;
+    in property <bool> is-dragging: false;
+    in property <bool> drag-active: false;
+
+    callback card-pressed(string, length, length);
+    callback card-moved(length, length);
+    callback card-released(length, length);
+
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: is-dragging ? #2563eb : Palette.border;
+    background: is-dragging ? Palette.selection-background : Palette.control-background;
+    height: 88px;
+    opacity: is-dragging ? 0.5 : 1.0;
+
+    HorizontalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        Rectangle {
+            width: 4px;
+            border-radius: 6px;
+            background: ticket.priority-colour;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+            alignment: start;
+
+            Text {
+                text: ticket.id;
+                font-size: 10px;
+                color: Palette.control-foreground.transparentize(0.4);
+            }
+            Text {
+                text: ticket.title;
+                font-size: 13px;
+                color: Palette.foreground;
+                wrap: word-wrap;
+            }
+            Text {
+                text: ticket.priority;
+                font-size: 10px;
+                color: ticket.priority-colour;
+            }
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: drag-active ? move : default;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                card-pressed(
+                    ticket.id,
+                    self.mouse-x + root.absolute-position.x,
+                    self.mouse-y + root.absolute-position.y
+                );
+            } else if e.kind == PointerEventKind.move {
+                card-moved(
+                    self.mouse-x + root.absolute-position.x,
+                    self.mouse-y + root.absolute-position.y
+                );
+            } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                card-released(
+                    self.mouse-x + root.absolute-position.x,
+                    self.mouse-y + root.absolute-position.y
+                );
+            }
+        }
+    }
+}
+
+component AppButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 32px;
+    min-width: 80px;
+    border-radius: 6px;
+    border-width: 1px;
+    background: !enabled ? Palette.control-background.darker(0.1)
+              : primary   ? #2563eb
+              :             Palette.control-background;
+    border-color: !enabled ? Palette.border
+                : primary   ? #1d4ed8
+                :             Palette.border;
+
+    Text {
+        text: label;
+        color: !enabled ? Palette.control-foreground.transparentize(0.4)
+             : primary   ? #ffffff
+             :             Palette.control-foreground;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        enabled: enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component KanbanColumn inherits Rectangle {
+    in property <string> column-title;
+    in property <[TicketData]> tickets;
+    in property <string> dragged-id: "";
+    in property <length> drag-y: -1px;
+    in property <bool> is-hover: false;
+
+    pure function card-slot-height() -> length { 88px + 6px }
+    pure function drop-index() -> int {
+        max(0, min(tickets.length, floor(drag-y / card-slot-height())))
+    }
+
+    callback card-pressed(string, length, length);
+    callback card-moved(length, length);
+    callback card-released(length, length);
+
+    width: 220px;
+    border-radius: 8px;
+    background: is-hover && dragged-id != ""
+        ? Palette.selection-background
+        : Palette.alternate-background;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            height: 20px;
+            Text {
+                text: column-title;
+                font-size: 12px;
+                font-weight: 700;
+                color: Palette.foreground;
+            }
+            Text {
+                text: tickets.length == 0 ? "" : "(" + tickets.length + ")";
+                font-size: 12px;
+                color: Palette.foreground.transparentize(0.4);
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 6px;
+                alignment: start;
+                padding: 2px;
+
+                if is-hover && dragged-id != "" && drop-index() == 0 : Rectangle {
+                    height: 3px;
+                    background: #2563eb;
+                    border-radius: 2px;
+                }
+
+                if tickets.length == 0 && (dragged-id == "" || !is-hover) : Text {
+                    text: "—";
+                    font-size: 12px;
+                    color: Palette.foreground.transparentize(0.6);
+                    horizontal-alignment: center;
+                }
+
+                for ticket[i] in tickets : VerticalLayout {
+                    spacing: 0px;
+
+                    TicketCard {
+                        ticket: ticket;
+                        width: 196px;
+                        is-dragging: ticket.id == dragged-id;
+                        drag-active: dragged-id != "";
+                        card-pressed(id, ax, ay) => { root.card-pressed(id, ax, ay); }
+                        card-moved(ax, ay)        => { root.card-moved(ax, ay); }
+                        card-released(ax, ay)     => { root.card-released(ax, ay); }
+                    }
+
+                    if is-hover && dragged-id != "" && drop-index() == i + 1 : Rectangle {
+                        height: 3px;
+                        background: #2563eb;
+                        border-radius: 2px;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component NewItemDialog inherits Rectangle {
+    in-out property <string> new-title: "";
+    in-out property <int> new-priority-index: 0;  // index into ["must","should","could"]
+    in property <string> next-id: "";
+    in property <string> error-message: "";
+
+    // Expose selected priority string for the confirm callback
+    pure public function priority-value() -> string {
+        new-priority-index == 1 ? "should" :
+        new-priority-index == 2 ? "could" :
+        "must"
+    }
+
+    callback confirm();
+    callback cancel();
+
+    background: #00000066;
+
+    Rectangle {
+        width: 420px;
+        height: 280px;
+        border-radius: 10px;
+        background: Palette.background;
+        border-width: 1px;
+        border-color: Palette.border;
+
+        VerticalBox {
+            padding: 24px;
+            spacing: 16px;
+
+            Text {
+                text: "New Backlog Item";
+                font-size: 16px;
+                font-weight: 700;
+                color: Palette.foreground;
+            }
+
+            Text {
+                text: "ID: " + next-id;
+                font-size: 12px;
+                color: Palette.foreground.transparentize(0.4);
+            }
+
+            LineEdit {
+                placeholder-text: "Title";
+                text <=> new-title;
+            }
+
+            ComboBox {
+                model: ["must", "should", "could"];
+                current-index <=> new-priority-index;
+            }
+
+            if error-message != "" : Text {
+                text: error-message;
+                font-size: 11px;
+                color: #e05252;
+            }
+
+            HorizontalBox {
+                spacing: 8px;
+                alignment: end;
+
+                AppButton {
+                    label: "Cancel";
+                    clicked => { cancel(); }
+                }
+                AppButton {
+                    label: "Create";
+                    primary: true;
+                    enabled: new-title != "";
+                    clicked => { confirm(); }
+                }
+            }
+        }
+    }
+}
+
+component EditItemDialog inherits Rectangle {
+    in property <string> ticket-id: "";
+    in property <string> ticket-status: "";
+    in-out property <string> edit-title: "";
+    in-out property <int> priority-index: 0;
+    in-out property <int> type-index: 0;
+    in-out property <string> edit-milestone: "";
+    in-out property <string> edit-body: "";
+    in property <string> error-message: "";
+
+    callback confirm();
+    callback cancel();
+
+    background: #00000066;
+
+    Rectangle {
+        width: 560px;
+        height: 520px;
+        border-radius: 10px;
+        background: Palette.background;
+        border-width: 1px;
+        border-color: Palette.border;
+
+        VerticalBox {
+            padding: 24px;
+            spacing: 12px;
+
+            HorizontalBox {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: ticket-id;
+                    font-size: 12px;
+                    color: Palette.foreground.transparentize(0.4);
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: ticket-status;
+                    font-size: 11px;
+                    color: Palette.foreground.transparentize(0.3);
+                    vertical-alignment: center;
+                }
+            }
+
+            LineEdit {
+                placeholder-text: "Title";
+                text <=> edit-title;
+            }
+
+            HorizontalBox {
+                spacing: 8px;
+
+                ComboBox {
+                    model: ["must", "should", "could"];
+                    current-index <=> priority-index;
+                }
+                ComboBox {
+                    model: ["feature", "bug", "chore", "docs", "test", "setup", "infra"];
+                    current-index <=> type-index;
+                }
+                LineEdit {
+                    placeholder-text: "Milestone (e.g. M1)";
+                    text <=> edit-milestone;
+                }
+            }
+
+            Text {
+                text: "Body (Markdown)";
+                font-size: 11px;
+                color: Palette.foreground.transparentize(0.4);
+            }
+
+            TextEdit {
+                text <=> edit-body;
+                vertical-stretch: 1;
+            }
+
+            if error-message != "" : Text {
+                text: error-message;
+                font-size: 11px;
+                color: #e05252;
+            }
+
+            HorizontalBox {
+                spacing: 8px;
+                alignment: end;
+
+                AppButton {
+                    label: "Cancel";
+                    clicked => { cancel(); }
+                }
+                AppButton {
+                    label: "Save";
+                    primary: true;
+                    enabled: edit-title != "";
+                    clicked => { confirm(); }
+                }
+            }
+        }
+    }
+}
+
+component DragGhost inherits Rectangle {
+    in property <TicketData> ticket;
+    in property <length> pos-x;
+    in property <length> pos-y;
+
+    x: pos-x - 110px;
+    y: pos-y - 44px;
+    width: 220px;
+    height: 88px;
+    border-radius: 6px;
+    border-width: 2px;
+    border-color: #2563eb;
+    background: Palette.control-background;
+    drop-shadow-blur: 12px;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: 4px;
+    drop-shadow-color: #00000033;
+    opacity: 0.92;
+
+    HorizontalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        Rectangle {
+            width: 4px;
+            border-radius: 6px;
+            background: ticket.priority-colour;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+            alignment: start;
+
+            Text {
+                text: ticket.id;
+                font-size: 10px;
+                color: Palette.control-foreground.transparentize(0.4);
+            }
+            Text {
+                text: ticket.title;
+                font-size: 13px;
+                color: Palette.foreground;
+                wrap: word-wrap;
+            }
+            Text {
+                text: ticket.priority;
+                font-size: 10px;
+                color: ticket.priority-colour;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Q-CTRL";
+    min-width: 1200px;
+    min-height: 768px;
+    background: Palette.background;
+
+    in property <[TicketData]> tickets-open: [];
+    in property <[TicketData]> tickets-ready: [];
+    in property <[TicketData]> tickets-on-hold: [];
+    in property <[TicketData]> tickets-in-progress: [];
+    in property <[TicketData]> tickets-awaiting: [];
+    in property <[TicketData]> tickets-canceled: [];
+    in property <[TicketData]> tickets-done: [];
+
+    in-out property <bool> dialog-visible: false;
+    in-out property <string> dialog-title: "";
+    in-out property <int> dialog-priority-index: 0;
+    in property <string> dialog-next-id: "";
+    in property <string> dialog-error: "";
+
+    // --- Drag state ---
+    private property <string> drag-id: "";
+    private property <length> drag-x: 0px;
+    private property <length> drag-y: 0px;
+    private property <length> drag-start-x: 0px;
+    private property <length> drag-start-y: 0px;
+    private property <string> drag-hover-col: "";
+
+    // --- Edit dialog state ---
+    in-out property <bool> edit-visible: false;
+    in-out property <string> edit-id: "";
+    in-out property <string> edit-status: "";
+    in-out property <string> edit-title: "";
+    in-out property <int> edit-priority-index: 0;   // index into ["must","should","could"]
+    in-out property <int> edit-type-index: 0;        // index into ["feature","bug","chore","docs","test","setup","infra"]
+    in-out property <string> edit-milestone: "";
+    in-out property <string> edit-body: "";
+    in property <string> edit-error: "";
+
+    callback new-item-requested();
+    callback new-item-confirmed(string, string);
+    callback new-item-cancelled();
+    callback reorder-ticket(string, string, string);
+    callback drag-started-rust(string);
+    callback card-clicked(string);
+    // (id, title, priority-index, type-index, milestone, body)
+    callback edit-confirmed(string, string, int, int, string, string);
+    callback edit-cancelled();
+
+    in property <TicketData> drag-ghost-ticket: { id: "", title: "", status: "", priority: "", ticket-type: "", milestone: "", body: "", priority-colour: #aaaaaa };
+
+    pure function col-status(col: string) -> string {
+        col == "OPEN"              ? "OPEN" :
+        col == "READY"             ? "READY" :
+        col == "ON-HOLD"           ? "ON-HOLD" :
+        col == "IN PROGRESS"       ? "IN_PROGRESS" :
+        col == "AWAITING OPERATOR" ? "AWAITING_OPERATOR" :
+        col == "CANCELED"          ? "CANCELED" :
+        col == "DONE"              ? "DONE" :
+        col
+    }
+
+    pure function col-for-x(x: length) -> string {
+        x < 250px  ? "OPEN" :
+        x < 480px  ? "READY" :
+        x < 710px  ? "ON-HOLD" :
+        x < 940px  ? "IN PROGRESS" :
+        x < 1170px ? "AWAITING OPERATOR" :
+        x < 1400px ? "CANCELED" :
+        "DONE"
+    }
+
+    pure function col-drag-y(y: length) -> length {
+        y - 72px - 36px
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            height: 44px;
+
+            Text {
+                text: "Q-CTRL";
+                font-size: 20px;
+                font-weight: 700;
+                color: Palette.foreground;
+                vertical-alignment: center;
+            }
+
+            AppButton {
+                label: "+ New Item";
+                primary: true;
+                clicked => {
+                    dialog-title = "";
+                    dialog-priority-index = 0;
+                    dialog-visible = true;
+                    new-item-requested();
+                }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                padding: 4px;
+
+                KanbanColumn {
+                    column-title: "OPEN";              tickets: tickets-open;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "OPEN";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "READY";             tickets: tickets-ready;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "READY";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "ON-HOLD";           tickets: tickets-on-hold;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "ON-HOLD";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "IN PROGRESS";       tickets: tickets-in-progress;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "IN PROGRESS";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "AWAITING OPERATOR"; tickets: tickets-awaiting;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "AWAITING OPERATOR";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "CANCELED";          tickets: tickets-canceled;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "CANCELED";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+                KanbanColumn {
+                    column-title: "DONE";              tickets: tickets-done;
+                    dragged-id: drag-id;   is-hover: drag-hover-col == "DONE";
+                    drag-y: col-drag-y(drag-y);
+                    card-pressed(id, ax, ay)  => { drag-id = id; drag-x = ax; drag-y = ay; drag-start-x = ax; drag-start-y = ay; drag-hover-col = col-for-x(ax); drag-started-rust(id); }
+                    card-moved(ax, ay)         => { drag-x = ax; drag-y = ay; drag-hover-col = col-for-x(ax); }
+                    card-released(ax, ay)      => {
+                        if drag-id != "" {
+                            if abs(ax - drag-start-x) < 4px && abs(ay - drag-start-y) < 4px {
+                                card-clicked(drag-id);
+                            } else {
+                                reorder-ticket(drag-id, "", col-status(col-for-x(ax)));
+                            }
+                            drag-id = ""; drag-hover-col = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if drag-id != "" : DragGhost {
+        ticket: drag-ghost-ticket;
+        pos-x: drag-x;
+        pos-y: drag-y;
+    }
+
+    if dialog-visible : NewItemDialog {
+        width: 100%;
+        height: 100%;
+        next-id: dialog-next-id;
+        new-title <=> dialog-title;
+        new-priority-index <=> dialog-priority-index;
+        error-message: dialog-error;
+        confirm => { new-item-confirmed(dialog-title, self.priority-value()); }
+        cancel => { dialog-visible = false; new-item-cancelled(); }
+    }
+
+    if edit-visible : EditItemDialog {
+        width: 100%;
+        height: 100%;
+        ticket-id: edit-id;
+        ticket-status: edit-status;
+        edit-title <=> edit-title;
+        priority-index <=> edit-priority-index;
+        type-index <=> edit-type-index;
+        edit-milestone <=> edit-milestone;
+        edit-body <=> edit-body;
+        error-message: edit-error;
+        confirm => {
+            edit-confirmed(edit-id, edit-title, edit-priority-index, edit-type-index, edit-milestone, edit-body);
+        }
+        cancel => {
+            edit-visible = false;
+            edit-cancelled();
+        }
+    }
+}

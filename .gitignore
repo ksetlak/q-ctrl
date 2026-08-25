@@ -1,0 +1,6 @@
+.DS_Store
+NOTES.md
+
+# Q-CTRL compiled binary (platform-specific, not committed)
+qctrl-app
+qctrl-app.exe
