@@ -1,6 +1,6 @@
 # Q-CTRL
 
-A native Kanban board for [Scaffold](https://github.com/ksetlak/scaffold)-based projects.
+A Kanban board front end for the backlog in [Scaffold](https://github.com/ksetlak/scaffold)-based projects.
 
 Q-CTRL reads your backlog directly from Markdown files on disk, lets you drag cards between status columns and reorder them within a column, and writes changes back immediately — no server, no database, no sync.
 
