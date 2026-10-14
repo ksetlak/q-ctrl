@@ -83,9 +83,11 @@ pub fn load_tickets(dir: &Path) -> Vec<Ticket> {
     tickets
 }
 
-/// Extract the numeric suffix from a ticket ID like "SB-007" → Some(7).
-fn id_number(id: &str) -> Option<u32> {
-    id.split('-').last()?.parse().ok()
+/// Extract the number from a ticket ID, but only if it belongs to `project_key`.
+/// ("SB-007", "SB") → Some(7); ("APP-003", "SB") → None.
+/// Each key has its own numbering continuity.
+fn id_number(id: &str, project_key: &str) -> Option<u32> {
+    id.strip_prefix(project_key)?.strip_prefix('-')?.parse().ok()
 }
 
 /// Read `project_key` from Scaffold's `scaffold.yaml`.
@@ -97,7 +99,8 @@ pub fn read_project_key(config_path: &Path) -> Option<String> {
     if key.is_empty() { None } else { Some(key.to_string()) }
 }
 
-/// Scan items/ and archive/ to find the next available ticket number.
+/// Scan items/ and archive/ for tickets with this project key and return the next ID
+/// in that key's own sequence. Tickets with other keys are ignored, so a new key starts at 001.
 pub fn next_ticket_id(project_key: &str, items_dir: &Path, archive_dir: &Path) -> String {
     let max_in = |dir: &Path| -> u32 {
         walkdir::WalkDir::new(dir)
@@ -109,7 +112,7 @@ pub fn next_ticket_id(project_key: &str, items_dir: &Path, archive_dir: &Path) -
                     && e.file_type().is_file()
             })
             .filter_map(|e| parse_ticket(e.path()))
-            .filter_map(|t| id_number(&t.frontmatter.id))
+            .filter_map(|t| id_number(&t.frontmatter.id, project_key))
             .max()
             .unwrap_or(0)
     };
@@ -508,5 +511,54 @@ mod tests {
     fn invalid_yaml_gives_none() {
         let p = temp_file("bad.yaml", Some("project_key: [unclosed\n"));
         assert_eq!(read_project_key(&p), None);
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("qctrl-test-{}-{}", std::process::id(), name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_ticket(dir: &Path, id: &str) {
+        let content = format!("---\nid: {}\ntitle: t\nstatus: OPEN\ntype: feature\npriority: must\n---\n\nbody\n", id);
+        fs::write(dir.join(format!("{}.md", id)), content).unwrap();
+    }
+
+    #[test]
+    fn id_number_only_matches_own_key() {
+        assert_eq!(id_number("SB-007", "SB"), Some(7));
+        assert_eq!(id_number("APP-003", "SB"), None);
+        assert_eq!(id_number("SB-007", "S"), None);
+        assert_eq!(id_number("SB-007", "SBX"), None);
+    }
+
+    #[test]
+    fn numbering_continues_within_a_key() {
+        let items = temp_dir("items-a");
+        let archive = temp_dir("archive-a");
+        write_ticket(&items, "SB-001");
+        write_ticket(&items, "SB-023");
+        write_ticket(&archive, "SB-012");
+        assert_eq!(next_ticket_id("SB", &items, &archive), "SB-024");
+    }
+
+    #[test]
+    fn new_key_starts_at_001() {
+        let items = temp_dir("items-b");
+        let archive = temp_dir("archive-b");
+        write_ticket(&items, "SB-023");
+        assert_eq!(next_ticket_id("APP", &items, &archive), "APP-001");
+    }
+
+    #[test]
+    fn keys_keep_separate_sequences() {
+        let items = temp_dir("items-c");
+        let archive = temp_dir("archive-c");
+        write_ticket(&items, "SB-023");
+        write_ticket(&items, "APP-001");
+        write_ticket(&archive, "APP-004");
+        assert_eq!(next_ticket_id("SB", &items, &archive), "SB-024");
+        assert_eq!(next_ticket_id("APP", &items, &archive), "APP-005");
     }
 }
