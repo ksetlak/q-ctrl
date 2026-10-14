@@ -88,6 +88,15 @@ fn id_number(id: &str) -> Option<u32> {
     id.split('-').last()?.parse().ok()
 }
 
+/// Read `project_key` from Scaffold's `scaffold.yaml`.
+/// Returns None if the file is missing, unparsable, or has no usable key.
+pub fn read_project_key(config_path: &Path) -> Option<String> {
+    let content = fs::read_to_string(config_path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    let key = value.get("project_key")?.as_str()?.trim();
+    if key.is_empty() { None } else { Some(key.to_string()) }
+}
+
 /// Scan items/ and archive/ to find the next available ticket number.
 pub fn next_ticket_id(project_key: &str, items_dir: &Path, archive_dir: &Path) -> String {
     let max_in = |dir: &Path| -> u32 {
@@ -460,4 +469,44 @@ fn rebalance_column(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str, content: Option<&str>) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("qctrl-test-{}-{}", std::process::id(), name));
+        let _ = fs::remove_file(&path);
+        if let Some(c) = content {
+            fs::write(&path, c).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn reads_project_key() {
+        let p = temp_file("ok.yaml", Some("# comment\nproject_key: RC\nsubagents: true\n"));
+        assert_eq!(read_project_key(&p), Some("RC".to_string()));
+    }
+
+    #[test]
+    fn missing_file_gives_none() {
+        let p = temp_file("missing.yaml", None);
+        assert_eq!(read_project_key(&p), None);
+    }
+
+    #[test]
+    fn missing_or_empty_key_gives_none() {
+        let p = temp_file("nokey.yaml", Some("subagents: true\n"));
+        assert_eq!(read_project_key(&p), None);
+        let p = temp_file("empty.yaml", Some("project_key: \"\"\n"));
+        assert_eq!(read_project_key(&p), None);
+    }
+
+    #[test]
+    fn invalid_yaml_gives_none() {
+        let p = temp_file("bad.yaml", Some("project_key: [unclosed\n"));
+        assert_eq!(read_project_key(&p), None);
+    }
 }
