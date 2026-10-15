@@ -41,7 +41,7 @@ Ticket IDs use `SB-{NNN}` (e.g. `SB-001`). IDs MUST NOT be reused, even if an it
 | `id` | string | `{PROJECT_KEY}-{NNN}` — zero-padded sequential integer |
 | `title` | string | Short headline (≤ 100 characters), imperative mood |
 | `status` | enum | See status tables above |
-| `type` | enum | `feature`, `chore`, `docs`, `test`, `setup`, `infra` |
+| `type` | enum | `feature`, `bug`, `refactor`, `perf`, `security`, `chore`, `docs`, `test`, `setup`, `infra` |
 | `priority` | enum | `must`, `should`, `could` (MoSCoW) |
 | `milestone` | string | e.g. `M1`, `M2` — per project convention |
 | `dependencies` | list | Ticket IDs that must be `AWAITING_OPERATOR` or `DONE` before this item starts. Default `[]`. |

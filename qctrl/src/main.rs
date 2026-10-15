@@ -298,7 +298,7 @@ fn main() {
 
     // Fixed model arrays — must match the ComboBox model order in app.slint exactly.
     const PRIORITY_MODEL: &[&str] = &["must", "should", "could"];
-    const TYPE_MODEL: &[&str] = &["feature", "bug", "chore", "docs", "test", "setup", "infra"];
+    const TYPE_MODEL: &[&str] = &["feature", "bug", "refactor", "perf", "security", "chore", "docs", "test", "setup", "infra"];
 
     fn priority_index(s: &str) -> i32 {
         PRIORITY_MODEL.iter().position(|&v| v == s).unwrap_or(0) as i32

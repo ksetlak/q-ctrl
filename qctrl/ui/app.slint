@@ -359,7 +359,7 @@ component EditItemDialog inherits Rectangle {
                     current-index <=> priority-index;
                 }
                 ComboBox {
-                    model: ["feature", "bug", "chore", "docs", "test", "setup", "infra"];
+                    model: ["feature", "bug", "refactor", "perf", "security", "chore", "docs", "test", "setup", "infra"];
                     current-index <=> type-index;
                 }
                 LineEdit {
@@ -498,7 +498,7 @@ export component AppWindow inherits Window {
     in-out property <string> edit-status: "";
     in-out property <string> edit-title: "";
     in-out property <int> edit-priority-index: 0;   // index into ["must","should","could"]
-    in-out property <int> edit-type-index: 0;        // index into ["feature","bug","chore","docs","test","setup","infra"]
+    in-out property <int> edit-type-index: 0;        // index into ["feature","bug","refactor","perf","security","chore","docs","test","setup","infra"]
     in-out property <string> edit-milestone: "";
     in-out property <string> edit-body: "";
     in property <string> edit-error: "";
