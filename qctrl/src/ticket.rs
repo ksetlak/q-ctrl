@@ -99,9 +99,28 @@ pub fn read_project_key(config_path: &Path) -> Option<String> {
     if key.is_empty() { None } else { Some(key.to_string()) }
 }
 
+/// Default number of digits in a ticket ID number (`APP-001`), as in Scaffold.
+pub const DEFAULT_TICKET_ID_DIGITS: usize = 3;
+
+/// Read `ticket_id_digits` from Scaffold's `scaffold.yaml`.
+/// Falls back to 3 if the file is missing or unparsable, or the key is missing
+/// or not a positive whole number.
+pub fn read_ticket_id_digits(config_path: &Path) -> usize {
+    let digits = fs::read_to_string(config_path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|value| value.get("ticket_id_digits").and_then(|v| v.as_u64()));
+    match digits {
+        Some(n) if n >= 1 => n as usize,
+        _ => DEFAULT_TICKET_ID_DIGITS,
+    }
+}
+
 /// Scan items/ and archive/ for tickets with this project key and return the next ID
-/// in that key's own sequence. Tickets with other keys are ignored, so a new key starts at 001.
-pub fn next_ticket_id(project_key: &str, items_dir: &Path, archive_dir: &Path) -> String {
+/// in that key's own sequence, zero-padded to `digits`. Tickets with other keys are
+/// ignored, so a new key starts at 1. IDs written with a different width still count,
+/// because only the number is compared.
+pub fn next_ticket_id(project_key: &str, digits: usize, items_dir: &Path, archive_dir: &Path) -> String {
     let max_in = |dir: &Path| -> u32 {
         walkdir::WalkDir::new(dir)
             .max_depth(1)
@@ -118,7 +137,7 @@ pub fn next_ticket_id(project_key: &str, items_dir: &Path, archive_dir: &Path) -
     };
 
     let max = max_in(items_dir).max(max_in(archive_dir));
-    format!("{}-{:03}", project_key, max + 1)
+    format!("{}-{:0width$}", project_key, max + 1, width = digits)
 }
 
 /// Create a new ticket file from the template, with id and status pre-filled.
@@ -540,7 +559,7 @@ mod tests {
         write_ticket(&items, "SB-001");
         write_ticket(&items, "SB-023");
         write_ticket(&archive, "SB-012");
-        assert_eq!(next_ticket_id("SB", &items, &archive), "SB-024");
+        assert_eq!(next_ticket_id("SB", 3, &items, &archive), "SB-024");
     }
 
     #[test]
@@ -548,7 +567,7 @@ mod tests {
         let items = temp_dir("items-b");
         let archive = temp_dir("archive-b");
         write_ticket(&items, "SB-023");
-        assert_eq!(next_ticket_id("APP", &items, &archive), "APP-001");
+        assert_eq!(next_ticket_id("APP", 3, &items, &archive), "APP-001");
     }
 
     #[test]
@@ -558,7 +577,60 @@ mod tests {
         write_ticket(&items, "SB-023");
         write_ticket(&items, "APP-001");
         write_ticket(&archive, "APP-004");
-        assert_eq!(next_ticket_id("SB", &items, &archive), "SB-024");
-        assert_eq!(next_ticket_id("APP", &items, &archive), "APP-005");
+        assert_eq!(next_ticket_id("SB", 3, &items, &archive), "SB-024");
+        assert_eq!(next_ticket_id("APP", 3, &items, &archive), "APP-005");
+    }
+
+    #[test]
+    fn reads_ticket_id_digits() {
+        let p = temp_file("digits-ok.yaml", Some("project_key: RC\nticket_id_digits: 4\n"));
+        assert_eq!(read_ticket_id_digits(&p), 4);
+    }
+
+    #[test]
+    fn ticket_id_digits_falls_back_to_3() {
+        let p = temp_file("digits-missing-file.yaml", None);
+        assert_eq!(read_ticket_id_digits(&p), 3);
+        let p = temp_file("digits-nokey.yaml", Some("project_key: RC\n"));
+        assert_eq!(read_ticket_id_digits(&p), 3);
+        let p = temp_file("digits-bad-yaml.yaml", Some("ticket_id_digits: [unclosed\n"));
+        assert_eq!(read_ticket_id_digits(&p), 3);
+    }
+
+    #[test]
+    fn invalid_ticket_id_digits_fall_back_to_3() {
+        for (name, content) in [
+            ("digits-zero.yaml", "ticket_id_digits: 0\n"),
+            ("digits-negative.yaml", "ticket_id_digits: -2\n"),
+            ("digits-fraction.yaml", "ticket_id_digits: 3.5\n"),
+            ("digits-text.yaml", "ticket_id_digits: four\n"),
+            ("digits-empty.yaml", "ticket_id_digits:\n"),
+        ] {
+            let p = temp_file(name, Some(content));
+            assert_eq!(read_ticket_id_digits(&p), 3, "{}", name);
+        }
+    }
+
+    #[test]
+    fn next_id_uses_the_configured_width() {
+        let items = temp_dir("items-d");
+        let archive = temp_dir("archive-d");
+        write_ticket(&items, "SB-023");
+        assert_eq!(next_ticket_id("SB", 4, &items, &archive), "SB-0024");
+        assert_eq!(next_ticket_id("SB", 5, &items, &archive), "SB-00024");
+        assert_eq!(next_ticket_id("SB", 1, &items, &archive), "SB-24");
+    }
+
+    #[test]
+    fn mixed_widths_still_count_and_wide_numbers_grow() {
+        let items = temp_dir("items-e");
+        let archive = temp_dir("archive-e");
+        write_ticket(&items, "SB-023");
+        write_ticket(&items, "SB-0150");
+        assert_eq!(next_ticket_id("SB", 3, &items, &archive), "SB-151");
+        assert_eq!(next_ticket_id("SB", 4, &items, &archive), "SB-0151");
+        write_ticket(&archive, "SB-999");
+        write_ticket(&archive, "SB-1000");
+        assert_eq!(next_ticket_id("SB", 3, &items, &archive), "SB-1001");
     }
 }

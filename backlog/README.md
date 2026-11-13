@@ -11,7 +11,7 @@ backlog/
 └── README.md    # this file
 ```
 
-Ticket IDs use `SB-{NNN}` (e.g. `SB-001`). IDs MUST NOT be reused, even if an item is cancelled. Filenames match the ticket ID (e.g. `SB-001.md`).
+Ticket IDs use `SB-{NNN}` (e.g. `SB-001`). The number is zero-padded to `ticket_id_digits` in `scaffold.yaml` (default 3, so `SB-001`; 4 gives `SB-0001`). IDs MUST NOT be reused, even if an item is cancelled. Filenames match the ticket ID (e.g. `SB-001.md`).
 
 ## Statuses
 
@@ -38,7 +38,7 @@ Ticket IDs use `SB-{NNN}` (e.g. `SB-001`). IDs MUST NOT be reused, even if an it
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | `{PROJECT_KEY}-{NNN}` — zero-padded sequential integer |
+| `id` | string | `{PROJECT_KEY}-{NNN}` — sequential integer, zero-padded to `ticket_id_digits` (default 3) |
 | `title` | string | Short headline (≤ 100 characters), imperative mood |
 | `status` | enum | See status tables above |
 | `type` | enum | `feature`, `bug`, `refactor`, `perf`, `security`, `chore`, `docs`, `test`, `setup`, `infra` |

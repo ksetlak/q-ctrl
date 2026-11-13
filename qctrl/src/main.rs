@@ -126,7 +126,8 @@ fn main() {
             let locked = tickets_c.lock().unwrap();
             let key = resolve_project_key(&config_path_c, &locked);
             info!("New item requested. Project key: {}", key);
-            let next_id = next_ticket_id(&key, &items_dir_c, &archive_dir_c);
+            let digits = ticket::read_ticket_id_digits(&config_path_c);
+            let next_id = next_ticket_id(&key, digits, &items_dir_c, &archive_dir_c);
             info!("Next ID: {}", next_id);
             if let Some(app) = app_weak.upgrade() {
                 app.set_dialog_next_id(next_id.into());
@@ -153,7 +154,8 @@ fn main() {
             let key = resolve_project_key(&config_path_c, &locked);
             drop(locked);
 
-            let next_id = next_ticket_id(&key, &items_dir_c, &archive_dir_c);
+            let digits = ticket::read_ticket_id_digits(&config_path_c);
+            let next_id = next_ticket_id(&key, digits, &items_dir_c, &archive_dir_c);
             info!("Creating ticket {} (title={:?}, priority={})", next_id, title, priority);
 
             match create_ticket(&next_id, &items_dir_c, &template_path_c) {
