@@ -65,11 +65,11 @@ fn populate_board(app: &AppWindow, tickets: &[Ticket]) {
 }
 
 /// Resolve the ticket ID prefix.
-/// 1. `project_key` in `scaffold.yaml` at the repo root (source of truth)
+/// 1. `project_key` in `.copier-answers.yml` at the repo root (source of truth, managed by Copier)
 /// 2. the prefix of an existing ticket, if the config is missing or has no key
 /// 3. `APP`, Scaffold's default
-fn resolve_project_key(config_path: &std::path::Path, tickets: &[Ticket]) -> String {
-    if let Some(key) = ticket::read_project_key(config_path) {
+fn resolve_project_key(answers_path: &std::path::Path, tickets: &[Ticket]) -> String {
+    if let Some(key) = ticket::read_project_key(answers_path) {
         return key;
     }
     tickets
@@ -77,7 +77,7 @@ fn resolve_project_key(config_path: &std::path::Path, tickets: &[Ticket]) -> Str
         .filter_map(|t| t.frontmatter.id.split('-').next().map(String::from))
         .find(|k| !k.is_empty())
         .unwrap_or_else(|| {
-            warn!("No project_key in scaffold.yaml and no tickets to infer from — falling back to APP");
+            warn!("No project_key in .copier-answers.yml and no tickets to infer from — falling back to APP");
             "APP".to_string()
         })
 }
@@ -103,12 +103,12 @@ fn main() {
     let items_dir = root.join("backlog").join("items");
     let archive_dir = root.join("backlog").join("archive");
     let template_path = root.join("backlog").join("_template.md");
-    let config_path = root.join("scaffold.yaml");
+    let answers_path = root.join(".copier-answers.yml");
 
     info!("items_dir:     {:?}", items_dir);
     info!("archive_dir:   {:?}", archive_dir);
     info!("template_path: {:?}", template_path);
-    info!("config_path:   {:?}", config_path);
+    info!("answers_path:   {:?}", answers_path);
 
     let tickets = Arc::new(Mutex::new(load_tickets(&items_dir)));
 
@@ -120,13 +120,13 @@ fn main() {
         let app_weak = app.as_weak();
         let items_dir_c = items_dir.clone();
         let archive_dir_c = archive_dir.clone();
-        let config_path_c = config_path.clone();
+        let answers_path_c = answers_path.clone();
         let tickets_c = tickets.clone();
         app.on_new_item_requested(move || {
             let locked = tickets_c.lock().unwrap();
-            let key = resolve_project_key(&config_path_c, &locked);
+            let key = resolve_project_key(&answers_path_c, &locked);
             info!("New item requested. Project key: {}", key);
-            let digits = ticket::read_ticket_id_digits(&config_path_c);
+            let digits = ticket::read_ticket_id_digits(&answers_path_c);
             let next_id = next_ticket_id(&key, digits, &items_dir_c, &archive_dir_c);
             info!("Next ID: {}", next_id);
             if let Some(app) = app_weak.upgrade() {
@@ -141,7 +141,7 @@ fn main() {
         let app_weak = app.as_weak();
         let items_dir_c = items_dir.clone();
         let archive_dir_c = archive_dir.clone();
-        let config_path_c = config_path.clone();
+        let answers_path_c = answers_path.clone();
         let template_path_c = template_path.clone();
         let tickets_c = tickets.clone();
         app.on_new_item_confirmed(move |title, priority| {
@@ -151,10 +151,10 @@ fn main() {
             };
 
             let locked = tickets_c.lock().unwrap();
-            let key = resolve_project_key(&config_path_c, &locked);
+            let key = resolve_project_key(&answers_path_c, &locked);
             drop(locked);
 
-            let digits = ticket::read_ticket_id_digits(&config_path_c);
+            let digits = ticket::read_ticket_id_digits(&answers_path_c);
             let next_id = next_ticket_id(&key, digits, &items_dir_c, &archive_dir_c);
             info!("Creating ticket {} (title={:?}, priority={})", next_id, title, priority);
 

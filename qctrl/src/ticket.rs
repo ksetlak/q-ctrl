@@ -90,10 +90,10 @@ fn id_number(id: &str, project_key: &str) -> Option<u32> {
     id.strip_prefix(project_key)?.strip_prefix('-')?.parse().ok()
 }
 
-/// Read `project_key` from Scaffold's `scaffold.yaml`.
+/// Read `project_key` from Scaffold's `.copier-answers.yml`.
 /// Returns None if the file is missing, unparsable, or has no usable key.
-pub fn read_project_key(config_path: &Path) -> Option<String> {
-    let content = fs::read_to_string(config_path).ok()?;
+pub fn read_project_key(answers_path: &Path) -> Option<String> {
+    let content = fs::read_to_string(answers_path).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
     let key = value.get("project_key")?.as_str()?.trim();
     if key.is_empty() { None } else { Some(key.to_string()) }
@@ -102,11 +102,11 @@ pub fn read_project_key(config_path: &Path) -> Option<String> {
 /// Default number of digits in a ticket ID number (`APP-001`), as in Scaffold.
 pub const DEFAULT_TICKET_ID_DIGITS: usize = 3;
 
-/// Read `ticket_id_digits` from Scaffold's `scaffold.yaml`.
+/// Read `ticket_id_digits` from Scaffold's `.copier-answers.yml`.
 /// Falls back to 3 if the file is missing or unparsable, or the key is missing
 /// or not a positive whole number.
-pub fn read_ticket_id_digits(config_path: &Path) -> usize {
-    let digits = fs::read_to_string(config_path)
+pub fn read_ticket_id_digits(answers_path: &Path) -> usize {
+    let digits = fs::read_to_string(answers_path)
         .ok()
         .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
         .and_then(|value| value.get("ticket_id_digits").and_then(|v| v.as_u64()));
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn reads_project_key() {
-        let p = temp_file("ok.yaml", Some("# comment\nproject_key: RC\nsubagents: true\n"));
+        let p = temp_file("ok.yaml", Some("# comment\nproject_key: RC\n_commit: v1.0.0\n"));
         assert_eq!(read_project_key(&p), Some("RC".to_string()));
     }
 
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn missing_or_empty_key_gives_none() {
-        let p = temp_file("nokey.yaml", Some("subagents: true\n"));
+        let p = temp_file("nokey.yaml", Some("_commit: v1.0.0\n"));
         assert_eq!(read_project_key(&p), None);
         let p = temp_file("empty.yaml", Some("project_key: \"\"\n"));
         assert_eq!(read_project_key(&p), None);

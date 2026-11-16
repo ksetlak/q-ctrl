@@ -1,16 +1,18 @@
 # Agent Guide
 
-This is the canonical agent instruction file for this repository. All AI tools should read this file. If your tool uses a different entry point (`.cursorrules`, `.gemini/AGENTS.md`, etc.), point it here — see `SETUP.md` for per-tool instructions.
+This is the canonical agent instruction file for this repository. All AI tools should read this file. If your tool uses a different entry point, point it here. See `SETUP.md` for how.
 
 ## Repository orientation
 
 - `AGENTS.md` — this file; rules and working guidance for AI agents
 - `README.md` — project overview, repository layout, developer setup
 - `backlog/README.md` — backlog schema, statuses, agent workflow
-- `backlog/items/` — one file per open backlog item; `backlog/archive/` for closed ones
+- `backlog/items/` — one file per open backlog item; `backlog/archive/` for ones closed and archived
 - `docs/adrs/` — Architecture Decision Records (index: `docs/adrs/README.md`)
 - `docs/prds/` — Product Requirements Documents (index: `docs/prds/README.md`)
-- `.agents/` — role-specific agent definitions and skills
+- `.agents/` — role-specific agent definitions, skills, and execution modes (index: `.agents/README.md`)
+- `.copier-answers.yml` — project properties chosen at creation (ticket ID prefix and number width). Managed by Copier; never edit by hand
+- `scaffold.yaml` — Scaffold settings that can change during the project (subagent support)
 
 When exploring a documentation subfolder, read its `README.md` as an index before opening individual files.
 
@@ -23,7 +25,14 @@ When exploring a documentation subfolder, read its `README.md` as an index befor
 
 ## Backlog delivery
 
-Use the `/pickup` skill (`.agents/skills/pickup/`) to work on backlog items. See `backlog/README.md` for the full workflow, ticket schema, and status rules.
+Use the `pickup` skill (`.agents/skills/pickup/`) to work on backlog items. See `backlog/README.md` for the full workflow, ticket schema, and status rules.
+
+## Configuration
+
+Scaffold's configuration lives in two files. Read them when a task depends on them. Neither is project documentation.
+
+- `.copier-answers.yml` holds the ticket ID prefix (`project_key`) and number width (`ticket_id_digits`). Never edit it by hand. Copier manages it.
+- `scaffold.yaml` holds settings the operator may change at any time, such as whether subagents are available.
 
 ## Dependency checks
 
