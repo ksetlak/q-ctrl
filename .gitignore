@@ -1,6 +1,12 @@
 .DS_Store
 NOTES.md
 
+# Ephemeral agent run artifacts
+backlog/_runs/
+
+# Confidential bodies of security tickets (see backlog/README.md)
+backlog/private/
+
 # Q-CTRL compiled binary (platform-specific, not committed)
 qctrl-app
 qctrl-app.exe

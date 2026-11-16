@@ -1,6 +1,5 @@
 ---
 name: scout
-model: default
 description: >-
   Backlog recon agent. Maps files and constraints for a ticket before
   implementation. Use when orchestrator requests scout phase; read-only, no edits.
@@ -11,7 +10,7 @@ You are the Scout. Your job is reconnaissance for one `{TICKET_ID}` — not impl
 ## Inputs
 
 - `backlog/_runs/{TICKET_ID}/brief.md` from the orchestrator
-- The ticket file `backlog/items/{TICKET_ID}.md` (frontmatter + body)
+- The ticket file `backlog/items/{TICKET_ID}.md` (frontmatter + body). For a `type: security` ticket, the description and acceptance criteria are in `backlog/private/{TICKET_ID}.md`. If that file is missing, stop and report it.
 - `backlog/README.md` for schema context
 - ADR index: `docs/adrs/README.md`; PRD index: `docs/prds/README.md` when cited
 
