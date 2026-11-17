@@ -47,5 +47,4 @@ Before adding any new dependency, verify it is appropriate for this project's co
 - **CWD convention**: the app always runs from the repo root. All file paths (`backlog/items/`, `backlog/archive/`, etc.) are resolved relative to the directory containing the `qctrl-app` binary.
 - **No database**. All state is read from and written to Markdown files with YAML frontmatter in `backlog/items/` and `backlog/archive/`. Do not introduce SQLite or any other storage layer without an ADR.
 - **User config** goes to `~/.config/qctrl/config.toml`. Never write config into the repo directory.
-- **Project key**: `SB` (used for Q-CTRL's own development backlog). Ticket IDs: `SB-001`, `SB-002`, etc.
 - Before adding any dependency, check that it compiles on both macOS and Linux. Prefer crates with no system library dependencies unless unavoidable.
