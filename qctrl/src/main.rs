@@ -1,23 +1,12 @@
+mod root;
 mod ticket;
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use root::{is_project, not_a_project_message, open_debug_log, project_root};
 use ticket::{apply_drop, create_ticket_in_column, load_tickets, next_ticket_id, write_fields, EditFields, Ticket};
 use log::{debug, info, warn};
 
 slint::include_modules!();
-
-/// The project root is the folder Q-CTRL was started from, the same way `git`
-/// or `just` work. The binary itself can live anywhere: on PATH, in Downloads,
-/// or at the project root.
-fn project_root() -> PathBuf {
-    std::env::current_dir().expect("Cannot determine the current working directory")
-}
-
-/// A Scaffold project has a `backlog/items/` folder at its root.
-fn is_project(root: &std::path::Path) -> bool {
-    root.join("backlog").join("items").is_dir()
-}
 
 fn priority_colour(priority: &str) -> slint::Color {
     match priority {
@@ -83,16 +72,8 @@ fn main() {
     let root = project_root();
 
     // Logs go to qctrl-debug.log in the project root (gitignored), but only
-    // inside a Scaffold project, so Q-CTRL never leaves a log in a random folder.
-    let log_target = if is_project(&root) {
-        std::fs::OpenOptions::new()
-            .create(true).append(true)
-            .open(root.join("qctrl-debug.log"))
-            .ok()
-            .map(|f| env_logger::Target::Pipe(Box::new(f)))
-    } else {
-        None
-    };
+    // inside a Scaffold project.
+    let log_target = open_debug_log(&root).map(|f| env_logger::Target::Pipe(Box::new(f)));
 
     let mut logger = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("debug")
@@ -106,10 +87,7 @@ fn main() {
     info!("Project root: {:?}", root);
 
     if !is_project(&root) {
-        eprintln!(
-            "qctrl: no backlog/items/ folder in {}.\nRun qctrl from the root of a Scaffold project.",
-            root.display()
-        );
+        eprintln!("{}", not_a_project_message(&root));
         std::process::exit(1);
     }
 
