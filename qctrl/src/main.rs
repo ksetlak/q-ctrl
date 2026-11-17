@@ -2,7 +2,7 @@ mod ticket;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use ticket::{create_ticket, load_tickets, next_ticket_id, order_for_drop, reorder_ticket, write_fields, write_status_and_order, EditFields, Ticket};
+use ticket::{apply_drop, create_ticket_in_column, load_tickets, next_ticket_id, write_fields, EditFields, Ticket};
 use log::{debug, info, warn};
 
 slint::include_modules!();
@@ -165,13 +165,19 @@ fn main() {
 
             let locked = tickets_c.lock().unwrap();
             let key = resolve_project_key(&answers_path_c, &locked);
+            // New tickets start in the OPEN column and appear at its bottom.
+            let open_column: Vec<Ticket> = locked
+                .iter()
+                .filter(|t| t.frontmatter.status.eq_ignore_ascii_case("OPEN"))
+                .cloned()
+                .collect();
             drop(locked);
 
             let digits = ticket::read_ticket_id_digits(&answers_path_c);
             let next_id = next_ticket_id(&key, digits, &items_dir_c, &archive_dir_c);
             info!("Creating ticket {} (title={:?}, priority={})", next_id, title, priority);
 
-            match create_ticket(&next_id, &items_dir_c, &template_path_c) {
+            match create_ticket_in_column(&next_id, &items_dir_c, &template_path_c, &open_column) {
                 Ok(path) => {
                     info!("Created {:?}", path);
                     if let Ok(content) = std::fs::read_to_string(&path) {
@@ -245,68 +251,24 @@ fn main() {
 
             let locked = tickets_c.lock().unwrap();
 
-            // Find the dragged ticket to check its current status
-            let current_status = locked
-                .iter()
-                .find(|t| t.frontmatter.id == dragged_id)
-                .map(|t| t.frontmatter.status.to_uppercase())
-                .unwrap_or_default();
-
-            let is_cross_column = current_status != column_status.to_uppercase();
-
-            // Get tickets currently in the target column, in display order
+            // Tickets currently in the target column, in display order.
             let column_tickets: Vec<Ticket> = locked
                 .iter()
-                .filter(|t| t.frontmatter.status.to_uppercase() == column_status.to_uppercase())
+                .filter(|t| t.frontmatter.status.eq_ignore_ascii_case(&column_status))
                 .cloned()
                 .collect();
-
             drop(locked);
 
-            let ticket_path = items_dir_c.join(format!("{}.md", dragged_id));
-
-            if is_cross_column {
-                // Cross-column: compute the correct order for the drop position,
-                // then write status + order together.
-                let new_order = order_for_drop(&after_id, &dragged_id, &column_tickets);
-                info!(
-                    "Cross-column drop: {} → status {} (was {}), order={:.6}, after={:?}",
-                    dragged_id, column_status, current_status, new_order,
-                    if after_id.is_empty() { "<top>" } else { &after_id }
-                );
-                match write_status_and_order(&ticket_path, &column_status, new_order) {
-                    Ok(()) => {
-                        info!("Status+order written: {} → {} @ {:.6}", dragged_id, column_status, new_order);
-                        let fresh = load_tickets(&items_dir_c);
-                        *tickets_c.lock().unwrap() = fresh;
-                        populate_board(&app, &tickets_c.lock().unwrap());
-                    }
-                    Err(e) => warn!("Cross-column drop failed: {}", e),
+            // Every drop, within a column or across columns, ends with a real
+            // order that matches where the card was dropped.
+            match apply_drop(&items_dir_c, &dragged_id, &after_id, &column_status, &column_tickets) {
+                Ok(order) => {
+                    info!("Dropped {} in {} @ {:.6}", dragged_id, column_status, order);
+                    let fresh = load_tickets(&items_dir_c);
+                    *tickets_c.lock().unwrap() = fresh;
+                    populate_board(&app, &tickets_c.lock().unwrap());
                 }
-            } else {
-                // Same-column reorder
-                if after_id.is_empty() && column_tickets.iter().all(|t| t.frontmatter.id != dragged_id) {
-                    // after_id is empty and ticket not in column — came from window TouchArea drop
-                    // with no specific after_id; just write status change
-                    match write_status_and_order(&ticket_path, &column_status, 0.0) {
-                        Ok(()) => {
-                            let fresh = load_tickets(&items_dir_c);
-                            *tickets_c.lock().unwrap() = fresh;
-                            populate_board(&app, &tickets_c.lock().unwrap());
-                        }
-                        Err(e) => warn!("Drop failed: {}", e),
-                    }
-                } else {
-                    match reorder_ticket(&dragged_id, &after_id, &column_tickets, &items_dir_c) {
-                        Ok(new_order) => {
-                            info!("Reordered {} → order {:.6}", dragged_id, new_order);
-                            let fresh = load_tickets(&items_dir_c);
-                            *tickets_c.lock().unwrap() = fresh;
-                            populate_board(&app, &tickets_c.lock().unwrap());
-                        }
-                        Err(e) => warn!("Reorder failed: {}", e),
-                    }
-                }
+                Err(e) => warn!("Drop failed: {}", e),
             }
         });
     }

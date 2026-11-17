@@ -11,7 +11,7 @@ pub struct TicketFrontmatter {
     #[serde(rename = "type", default)]
     pub ticket_type: String,
     #[serde(default)]
-    pub order: f64,
+    pub order: Option<f64>,
     #[serde(default)]
     pub milestone: Option<String>,
 }
@@ -73,14 +73,37 @@ pub fn load_tickets(dir: &Path) -> Vec<Ticket> {
         .collect();
 
     tickets.sort_by(|a, b| {
-        a.frontmatter
-            .order
-            .partial_cmp(&b.frontmatter.order)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        compare_order(a.frontmatter.order, b.frontmatter.order)
             .then(a.frontmatter.id.cmp(&b.frontmatter.id))
     });
 
     tickets
+}
+
+/// Compare two optional order values: ordered tickets come first (lowest value
+/// first), unordered ones (no value) come after them. `0.0` is a normal value.
+pub fn compare_order(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// Id of the ticket that shows last in a column, or "" for an empty column.
+/// Pass it as `after_id` to put a ticket at the bottom.
+pub fn last_in_column(column_tickets: &[Ticket]) -> String {
+    let mut sorted: Vec<&Ticket> = column_tickets.iter().collect();
+    sorted.sort_by(|a, b| {
+        compare_order(a.frontmatter.order, b.frontmatter.order)
+            .then(a.frontmatter.id.cmp(&b.frontmatter.id))
+    });
+    sorted
+        .last()
+        .map(|t| t.frontmatter.id.clone())
+        .unwrap_or_default()
 }
 
 /// Extract the number from a ticket ID, but only if it belongs to `project_key`.
@@ -176,124 +199,130 @@ pub fn create_ticket(
     Ok(dest)
 }
 
+/// Create a ticket from the template and place it at the bottom of its column
+/// (the OPEN column, where new tickets start). A ticket made on the board
+/// always appears somewhere, so it always gets an order that matches. The
+/// template itself carries no `order`, which keeps tickets created by hand or
+/// by an agent unordered.
+pub fn create_ticket_in_column(
+    id: &str,
+    items_dir: &Path,
+    template_path: &Path,
+    column_tickets: &[Ticket],
+) -> Result<std::path::PathBuf, String> {
+    let path = create_ticket(id, items_dir, template_path)?;
+    let after_id = last_in_column(column_tickets);
+    let writes = place_in_column(&after_id, id, column_tickets);
+    for (ticket_id, order) in &writes {
+        let target = items_dir.join(format!("{}.md", ticket_id));
+        write_order(&target, *order)?;
+    }
+    Ok(path)
+}
+
 // ---------------------------------------------------------------------------
-// Drag-and-drop reorder + status-change support
+// Drag-and-drop placement, status changes, and ticket file writers
 // ---------------------------------------------------------------------------
 
+/// Gap below which two neighbouring order values are considered too close.
 const REBALANCE_THRESHOLD: f64 = 0.001;
+
+/// Rebuild a ticket file from its frontmatter lines and body. `yaml_lines`
+/// come from splitting the text between the two `---` delimiters, so the first
+/// line is empty. The closing delimiter always goes on its own line.
+fn assemble(yaml_lines: &[String], body: &str) -> String {
+    format!("---{}\n---{}", yaml_lines.join("\n"), body)
+}
+
+/// Split a ticket file into its frontmatter lines and body.
+fn split_ticket(content: &str, path: &Path) -> Result<(Vec<String>, String), String> {
+    let mut parts = content.splitn(3, "---");
+    let _empty = parts.next().unwrap_or("");
+    let yaml = parts
+        .next()
+        .ok_or_else(|| format!("No frontmatter in {:?}", path))?;
+    let body = parts.next().unwrap_or("");
+    Ok((yaml.lines().map(String::from).collect(), body.to_string()))
+}
 
 /// Write a new `status` value into a ticket's frontmatter on disk.
 /// Rewrites only the `status:` line; all other content is preserved verbatim.
 pub fn write_status(path: &Path, new_status: &str) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Cannot read {:?}: {}", path, e))?;
+    let (lines, body) = split_ticket(&content, path)?;
 
-    let mut parts = content.splitn(3, "---");
-    let _empty = parts.next().unwrap_or("");
-    let yaml = parts
-        .next()
-        .ok_or_else(|| format!("No frontmatter in {:?}", path))?;
-    let body = parts.next().unwrap_or("");
-
-    let new_yaml = yaml
-        .lines()
+    let new_lines: Vec<String> = lines
+        .into_iter()
         .map(|line| {
             if line.starts_with("status:") {
                 format!("status: {}", new_status)
             } else {
-                line.to_string()
+                line
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
 
-    let new_content = format!("---{}---{}", new_yaml, body);
-    fs::write(path, new_content).map_err(|e| format!("Cannot write {:?}: {}", path, e))?;
-    Ok(())
+    fs::write(path, assemble(&new_lines, &body))
+        .map_err(|e| format!("Cannot write {:?}: {}", path, e))
+}
+
+/// Set `order` in a list of frontmatter lines: replace the line if the ticket
+/// has one, otherwise add it at the end.
+fn set_order_line(lines: Vec<String>, new_order: f64) -> Vec<String> {
+    let mut written = false;
+    let mut out: Vec<String> = lines
+        .into_iter()
+        .map(|line| {
+            if line.starts_with("order:") {
+                written = true;
+                format!("order: {:.6}", new_order)
+            } else {
+                line
+            }
+        })
+        .collect();
+    if !written {
+        while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            out.pop();
+        }
+        out.push(format!("order: {:.6}", new_order));
+    }
+    out
 }
 
 /// Write both `status` and `order` in a single pass to avoid two reads/writes.
 pub fn write_status_and_order(path: &Path, new_status: &str, new_order: f64) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Cannot read {:?}: {}", path, e))?;
+    let (lines, body) = split_ticket(&content, path)?;
 
-    let mut parts = content.splitn(3, "---");
-    let _empty = parts.next().unwrap_or("");
-    let yaml = parts
-        .next()
-        .ok_or_else(|| format!("No frontmatter in {:?}", path))?;
-    let body = parts.next().unwrap_or("");
-
-    let mut order_written = false;
-    let new_yaml = yaml
-        .lines()
+    let with_status: Vec<String> = lines
+        .into_iter()
         .map(|line| {
             if line.starts_with("status:") {
                 format!("status: {}", new_status)
-            } else if line.starts_with("order:") {
-                order_written = true;
-                format!("order: {:.6}", new_order)
             } else {
-                line.to_string()
+                line
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
 
-    let new_yaml = if order_written {
-        new_yaml
-    } else {
-        format!("{}\norder: {:.6}", new_yaml.trim_end(), new_order)
-    };
-
-    let new_content = format!("---{}---{}", new_yaml, body);
-    fs::write(path, new_content).map_err(|e| format!("Cannot write {:?}: {}", path, e))?;
-    Ok(())
+    let new_lines = set_order_line(with_status, new_order);
+    fs::write(path, assemble(&new_lines, &body))
+        .map_err(|e| format!("Cannot write {:?}: {}", path, e))
 }
 
 /// Write a new `order` value into a ticket's frontmatter on disk.
-/// Rewrites only the `order:` line; all other content is preserved verbatim.
+/// Replaces the `order:` line, or adds one when the ticket has none. All other
+/// content is preserved verbatim.
 pub fn write_order(path: &Path, new_order: f64) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Cannot read {:?}: {}", path, e))?;
-
-    // Replace the order: line inside the first frontmatter block.
-    // Pattern: line starting with "order:" between the two "---" delimiters.
-    let mut parts = content.splitn(3, "---");
-    let _empty = parts.next().unwrap_or("");
-    let yaml = parts
-        .next()
-        .ok_or_else(|| format!("No frontmatter in {:?}", path))?;
-    let body = parts.next().unwrap_or("");
-
-    // Replace or insert the order field
-    let new_yaml = if yaml.contains("\norder:") || yaml.starts_with("order:") {
-        // Replace existing line
-        yaml.lines()
-            .map(|line| {
-                if line.starts_with("order:") {
-                    format!("order: {:.6}", new_order)
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        // Append before the closing content (rare: template might lack order)
-        format!("{}\norder: {:.6}", yaml.trim_end(), new_order)
-    };
-
-    let new_content = format!("---{}---{}", new_yaml, body);
-    // Ensure the yaml block starts with a newline after ---
-    let new_content = if new_yaml.starts_with('\n') {
-        new_content
-    } else {
-        format!("---\n{}---{}", new_yaml, body)
-    };
-
-    fs::write(path, new_content).map_err(|e| format!("Cannot write {:?}: {}", path, e))?;
-    Ok(())
+    let (lines, body) = split_ticket(&content, path)?;
+    let new_lines = set_order_line(lines, new_order);
+    fs::write(path, assemble(&new_lines, &body))
+        .map_err(|e| format!("Cannot write {:?}: {}", path, e))
 }
 
 /// Edit a ticket's user-facing fields in one pass.
@@ -310,16 +339,11 @@ pub struct EditFields {
 pub fn write_fields(path: &Path, fields: &EditFields) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Cannot read {:?}: {}", path, e))?;
+    // The old body is ignored: it is replaced wholesale.
+    let (lines, _old_body) = split_ticket(&content, path)?;
 
-    let mut parts = content.splitn(3, "---");
-    let _empty = parts.next().unwrap_or("");
-    let yaml = parts
-        .next()
-        .ok_or_else(|| format!("No frontmatter in {:?}", path))?;
-    // Ignore old body — we'll replace it wholesale.
-
-    let new_yaml = yaml
-        .lines()
+    let new_lines: Vec<String> = lines
+        .into_iter()
         .map(|line| {
             if line.starts_with("title:") {
                 format!("title: {}", fields.title)
@@ -330,167 +354,149 @@ pub fn write_fields(path: &Path, fields: &EditFields) -> Result<(), String> {
             } else if line.starts_with("milestone:") {
                 format!("milestone: {}", fields.milestone)
             } else {
-                line.to_string()
+                line
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
 
-    // Reconstruct: frontmatter + body (body always starts with a blank line)
+    // Body always starts with a blank line.
     let new_body = if fields.body.is_empty() {
         String::new()
     } else {
         format!("\n{}", fields.body.trim_start_matches('\n'))
     };
-    let new_content = format!("---{}---{}", new_yaml, new_body);
 
-    fs::write(path, new_content).map_err(|e| format!("Cannot write {:?}: {}", path, e))?;
-    Ok(())
+    fs::write(path, assemble(&new_lines, &new_body))
+        .map_err(|e| format!("Cannot write {:?}: {}", path, e))
 }
 
-/// Reorder a ticket within (or across, for SB-007) a column by computing a
-/// midpoint `order` value.
+/// Decide the order values to write when `dragged_id` is placed in a column.
 ///
-/// `dragged_id`  — the ticket being dropped.
-/// `after_id`    — id of the ticket it should appear after, or "" for top.
-/// `column_tickets` — tickets currently visible in the target column, in
-///                    display order (sorted by order asc).
-/// `items_dir`   — used to locate the file to patch.
+/// `after_id` is the ticket it should appear after, or "" for the top of the
+/// column. An id that isn't in the column means "at the bottom". The dragged
+/// ticket may or may not already be in `column_tickets`.
 ///
-/// Returns the new order value assigned, or an error string.
-pub fn reorder_ticket(
-    dragged_id: &str,
-    after_id: &str,
-    column_tickets: &[Ticket],
-    items_dir: &Path,
-) -> Result<f64, String> {
-    // Build ordered list excluding the dragged card itself
-    let others: Vec<&Ticket> = column_tickets
+/// The result lists `(ticket id, order)` pairs to write. It always contains
+/// the dragged ticket, so a placement made on the board never leaves a ticket
+/// without an order. Tickets without an order sort after ordered ones, so when
+/// the ticket lands below some of them, those get orders too. That keeps the
+/// saved order the same as what the board shows.
+///
+/// `0.0` is an ordinary value here. Only a missing `order` means unordered.
+pub fn place_in_column(after_id: &str, dragged_id: &str, column_tickets: &[Ticket]) -> Vec<(String, f64)> {
+    let mut others: Vec<&Ticket> = column_tickets
         .iter()
         .filter(|t| t.frontmatter.id != dragged_id)
         .collect();
+    others.sort_by(|a, b| {
+        compare_order(a.frontmatter.order, b.frontmatter.order)
+            .then(a.frontmatter.id.cmp(&b.frontmatter.id))
+    });
 
-    // Find the position of `after_id` in others
-    let insert_after_idx: Option<usize> = if after_id.is_empty() {
-        None // insert at top
+    // Insert position: 0 is the top, k + 1 is just after others[k].
+    let idx = if after_id.is_empty() {
+        0
     } else {
         others
             .iter()
             .position(|t| t.frontmatter.id == after_id)
+            .map(|p| p + 1)
+            .unwrap_or(others.len())
     };
 
-    let new_order = compute_order(&others, insert_after_idx)?;
+    // Ordered tickets come first, so this is the number of leading ones.
+    let ordered = others.iter().take_while(|t| t.frontmatter.order.is_some()).count();
 
-    // Find the ticket file and write
-    let path = items_dir.join(format!("{}.md", dragged_id));
-    if !path.exists() {
-        return Err(format!("Ticket file not found: {:?}", path));
-    }
-
-    write_order(&path, new_order)?;
-
-    // Check if rebalance is needed: if the gap between the written value and
-    // either neighbour is below threshold, rebalance the whole column.
-    let needs_rebalance = {
-        let before_order = insert_after_idx.map(|i| others[i].frontmatter.order);
-        let after_order = insert_after_idx
-            .map(|i| i + 1)
-            .unwrap_or(0)
-            .checked_sub(0) // just to get after index
-            .and_then(|_| {
-                let after_idx = insert_after_idx.map(|i| i + 1).unwrap_or(0);
-                others.get(after_idx).map(|t| t.frontmatter.order)
-            });
-
-        let gap_before = before_order.map(|o| (new_order - o).abs()).unwrap_or(f64::MAX);
-        let gap_after = after_order.map(|o| (o - new_order).abs()).unwrap_or(f64::MAX);
-        gap_before < REBALANCE_THRESHOLD || gap_after < REBALANCE_THRESHOLD
+    let mut writes: Vec<(String, f64)> = Vec::new();
+    let new_order = if idx <= ordered {
+        let prev = if idx > 0 { others[idx - 1].frontmatter.order } else { None };
+        let next = if idx < ordered { others[idx].frontmatter.order } else { None };
+        match (prev, next) {
+            (None, None) => 1.0,
+            (None, Some(n)) => n - 1.0,
+            (Some(p), None) => p + 1.0,
+            (Some(p), Some(n)) => (p + n) / 2.0,
+        }
+    } else {
+        // Landing below unordered tickets: number them after the last ordered one.
+        let base = if ordered > 0 {
+            others[ordered - 1].frontmatter.order.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        for (n, t) in others[ordered..idx].iter().enumerate() {
+            writes.push((t.frontmatter.id.clone(), base + (n + 1) as f64));
+        }
+        base + (idx - ordered + 1) as f64
     };
+    writes.push((dragged_id.to_string(), new_order));
 
-    if needs_rebalance {
-        rebalance_column(dragged_id, new_order, column_tickets, items_dir)?;
-    }
-
-    Ok(new_order)
-}
-
-/// Return the `order` value a ticket should receive when dropped after `after_id`
-/// in a target column. Pass the target column's current tickets (the dragged
-/// ticket may or may not be among them — it is excluded before computing).
-/// `after_id` empty means "insert at top".
-pub fn order_for_drop(after_id: &str, dragged_id: &str, column_tickets: &[Ticket]) -> f64 {
-    let others: Vec<&Ticket> = column_tickets
+    // The column as it will look: every ticket that has an order, top to bottom.
+    let mut sequence: Vec<(String, Option<f64>)> = others
         .iter()
-        .filter(|t| t.frontmatter.id != dragged_id)
+        .map(|t| {
+            let order = writes
+                .iter()
+                .find(|(id, _)| *id == t.frontmatter.id)
+                .map(|(_, o)| *o)
+                .or(t.frontmatter.order);
+            (t.frontmatter.id.clone(), order)
+        })
+        .collect();
+    sequence.insert(idx, (dragged_id.to_string(), Some(new_order)));
+    let ordered_part: Vec<&(String, Option<f64>)> = sequence
+        .iter()
+        .take_while(|(_, o)| o.is_some())
         .collect();
 
-    let insert_after_idx: Option<usize> = if after_id.is_empty() {
-        None
-    } else {
-        let pos = others.iter().position(|t| t.frontmatter.id == after_id);
-        if pos.is_none() {
-            // after_id not found in target column — it came from the source column.
-            // Insert at bottom (after last card).
-            return compute_order(&others, others.len().checked_sub(1)).unwrap_or(1.0);
-        }
-        pos
-    };
-
-    compute_order(&others, insert_after_idx).unwrap_or(1.0)
-}
-
-/// Compute the midpoint order value for inserting after `others[insert_after_idx]`.
-/// `insert_after_idx = None` means insert at the top.
-fn compute_order(others: &[&Ticket], insert_after_idx: Option<usize>) -> Result<f64, String> {
-    let prev_order = insert_after_idx.map(|i| others[i].frontmatter.order);
-    let next_order = insert_after_idx
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let next_order = others.get(next_order).map(|t| t.frontmatter.order);
-
-    let new_order = match (prev_order, next_order) {
-        (None, None) => 1.0,                              // only card
-        (None, Some(n)) => n - 1.0,                       // insert before first
-        (Some(p), None) => p + 1.0,                       // insert after last
-        (Some(p), Some(n)) => (p + n) / 2.0,              // midpoint
-    };
-
-    Ok(new_order)
-}
-
-/// Rebalance all order values in a column to evenly-spaced integers (1, 2, 3…).
-/// The dragged ticket (identified by `dragged_id`) is placed at `target_order`
-/// relative to the others; after rebalancing, all values become clean integers.
-fn rebalance_column(
-    dragged_id: &str,
-    _target_order: f64,
-    column_tickets: &[Ticket],
-    items_dir: &Path,
-) -> Result<(), String> {
-    // Re-sort by current order to get the current sequence
-    let mut sorted: Vec<&Ticket> = column_tickets.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.frontmatter
-            .order
-            .partial_cmp(&b.frontmatter.order)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.frontmatter.id.cmp(&b.frontmatter.id))
+    // Neighbours that ended up too close together (or equal): renumber 1, 2, 3...
+    let crowded = ordered_part.windows(2).any(|w| {
+        let a = w[0].1.unwrap_or(0.0);
+        let b = w[1].1.unwrap_or(0.0);
+        (b - a).abs() < REBALANCE_THRESHOLD
     });
-
-    for (i, ticket) in sorted.iter().enumerate() {
-        let new_order = (i + 1) as f64;
-        // Skip the dragged card — it was already written with a precise value;
-        // this rebalance just cleans up the neighbours.
-        if ticket.frontmatter.id == dragged_id {
-            continue;
-        }
-        let path = items_dir.join(format!("{}.md", ticket.frontmatter.id));
-        if path.exists() {
-            let _ = write_order(&path, new_order); // best-effort; log but don't abort
-        }
+    if crowded {
+        return ordered_part
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (id.clone(), (i + 1) as f64))
+            .collect();
     }
 
-    Ok(())
+    writes
+}
+
+/// Place a ticket in a column and save the result: the ticket's own file gets
+/// its new status and order, and any other file whose order has to change gets
+/// that too. Returns the order written for the dragged ticket.
+pub fn apply_drop(
+    items_dir: &Path,
+    dragged_id: &str,
+    after_id: &str,
+    status: &str,
+    column_tickets: &[Ticket],
+) -> Result<f64, String> {
+    let writes = place_in_column(after_id, dragged_id, column_tickets);
+
+    let dragged_order = writes
+        .iter()
+        .find(|(id, _)| id == dragged_id)
+        .map(|(_, o)| *o)
+        .ok_or_else(|| format!("No order computed for {}", dragged_id))?;
+
+    // The dragged ticket first: if its file is missing, nothing else is touched.
+    let dragged_path = items_dir.join(format!("{}.md", dragged_id));
+    if !dragged_path.exists() {
+        return Err(format!("Ticket file not found: {:?}", dragged_path));
+    }
+    write_status_and_order(&dragged_path, status, dragged_order)?;
+
+    for (id, order) in writes.iter().filter(|(id, _)| id != dragged_id) {
+        let path = items_dir.join(format!("{}.md", id));
+        write_order(&path, *order)?;
+    }
+
+    Ok(dragged_order)
 }
 
 #[cfg(test)]
@@ -632,5 +638,273 @@ mod tests {
         write_ticket(&archive, "SB-999");
         write_ticket(&archive, "SB-1000");
         assert_eq!(next_ticket_id("SB", 3, &items, &archive), "SB-1001");
+    }
+
+    // --- order handling (SB-025) -------------------------------------------
+
+    /// Write a ticket with an optional order line. None leaves the key out.
+    fn write_ordered(dir: &Path, id: &str, status: &str, order: Option<&str>) {
+        let order_line = order.map(|o| format!("order: {}\n", o)).unwrap_or_default();
+        let content = format!(
+            "---\nid: {}\ntitle: t\nstatus: {}\ntype: feature\npriority: must\n{}---\n\nbody\n",
+            id, status, order_line
+        );
+        fs::write(dir.join(format!("{}.md", id)), content).unwrap();
+    }
+
+    fn column(dir: &Path, status: &str) -> Vec<Ticket> {
+        load_tickets(dir)
+            .into_iter()
+            .filter(|t| t.frontmatter.status == status)
+            .collect()
+    }
+
+    fn ids(tickets: &[Ticket]) -> Vec<String> {
+        tickets.iter().map(|t| t.frontmatter.id.clone()).collect()
+    }
+
+    fn order_of(dir: &Path, id: &str) -> Option<f64> {
+        parse_ticket(&dir.join(format!("{}.md", id))).unwrap().frontmatter.order
+    }
+
+    #[test]
+    fn missing_empty_and_null_order_load_as_unordered() {
+        let dir = temp_dir("ord-load");
+        write_ordered(&dir, "A-001", "OPEN", None);
+        write_ordered(&dir, "A-002", "OPEN", Some(""));
+        write_ordered(&dir, "A-003", "OPEN", Some("null"));
+        write_ordered(&dir, "A-004", "OPEN", Some("0.0"));
+        assert_eq!(order_of(&dir, "A-001"), None);
+        assert_eq!(order_of(&dir, "A-002"), None);
+        assert_eq!(order_of(&dir, "A-003"), None);
+        assert_eq!(order_of(&dir, "A-004"), Some(0.0));
+    }
+
+    #[test]
+    fn unordered_tickets_sort_after_ordered_ones_then_by_id() {
+        let dir = temp_dir("ord-sort");
+        write_ordered(&dir, "A-001", "OPEN", None);
+        write_ordered(&dir, "A-002", "OPEN", Some("5.0"));
+        write_ordered(&dir, "A-003", "OPEN", Some("0.0"));
+        write_ordered(&dir, "A-004", "OPEN", None);
+        write_ordered(&dir, "A-005", "OPEN", Some("-2.0"));
+        assert_eq!(
+            ids(&load_tickets(&dir)),
+            vec!["A-005", "A-003", "A-002", "A-001", "A-004"]
+        );
+    }
+
+    #[test]
+    fn zero_is_an_ordinary_order() {
+        // The original bug: dropping above a card with order 1.0 computed exactly 0.0.
+        let dir = temp_dir("ord-zero");
+        write_ordered(&dir, "A-001", "READY", Some("1.0"));
+        write_ordered(&dir, "A-002", "OPEN", Some("3.0"));
+        let col = column(&dir, "READY");
+        let order = apply_drop(&dir, "A-002", "", "READY", &col).unwrap();
+        assert_eq!(order, 0.0);
+        assert_eq!(order_of(&dir, "A-002"), Some(0.0));
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-002", "A-001"]);
+    }
+
+    #[test]
+    fn midpoint_of_minus_one_and_one_is_kept() {
+        let dir = temp_dir("ord-mid");
+        write_ordered(&dir, "A-001", "READY", Some("-1.0"));
+        write_ordered(&dir, "A-002", "READY", Some("1.0"));
+        write_ordered(&dir, "A-003", "OPEN", None);
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-003", "A-001", "READY", &col).unwrap();
+        assert_eq!(order_of(&dir, "A-003"), Some(0.0));
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-001", "A-003", "A-002"]);
+    }
+
+    #[test]
+    fn drop_into_an_empty_column() {
+        let dir = temp_dir("ord-empty");
+        write_ordered(&dir, "A-001", "OPEN", None);
+        let col = column(&dir, "READY");
+        assert!(col.is_empty());
+        apply_drop(&dir, "A-001", "", "READY", &col).unwrap();
+        assert_eq!(order_of(&dir, "A-001"), Some(1.0));
+        assert_eq!(column(&dir, "READY").len(), 1);
+    }
+
+    #[test]
+    fn drop_at_top_bottom_and_between() {
+        let dir = temp_dir("ord-pos");
+        write_ordered(&dir, "A-001", "READY", Some("1.0"));
+        write_ordered(&dir, "A-002", "READY", Some("2.0"));
+        write_ordered(&dir, "A-003", "OPEN", None);
+        write_ordered(&dir, "A-004", "OPEN", None);
+        write_ordered(&dir, "A-005", "OPEN", None);
+
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-003", "", "READY", &col).unwrap();
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-003", "A-001", "A-002"]);
+
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-004", "A-002", "READY", &col).unwrap();
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-003", "A-001", "A-002", "A-004"]);
+
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-005", "A-001", "READY", &col).unwrap();
+        assert_eq!(
+            ids(&column(&dir, "READY")),
+            vec!["A-003", "A-001", "A-005", "A-002", "A-004"]
+        );
+    }
+
+    #[test]
+    fn no_drop_leaves_a_ticket_without_an_order() {
+        let dir = temp_dir("ord-never-none");
+        write_ordered(&dir, "A-001", "READY", None);
+        write_ordered(&dir, "A-002", "READY", None);
+        for after in ["", "A-001", "A-002", "unknown-id"] {
+            write_ordered(&dir, "A-003", "OPEN", None);
+            let col = column(&dir, "READY");
+            apply_drop(&dir, "A-003", after, "READY", &col).unwrap();
+            assert!(order_of(&dir, "A-003").is_some(), "after={:?}", after);
+        }
+    }
+
+    #[test]
+    fn dropping_below_unordered_tickets_numbers_them_so_the_view_matches() {
+        let dir = temp_dir("ord-below-unordered");
+        write_ordered(&dir, "A-001", "READY", Some("4.0"));
+        write_ordered(&dir, "A-002", "READY", None);
+        write_ordered(&dir, "A-003", "READY", None);
+        write_ordered(&dir, "A-004", "OPEN", None);
+        let before = column(&dir, "READY");
+        assert_eq!(ids(&before), vec!["A-001", "A-002", "A-003"]);
+        // Drop between the two unordered tickets.
+        apply_drop(&dir, "A-004", "A-002", "READY", &before).unwrap();
+        assert_eq!(
+            ids(&column(&dir, "READY")),
+            vec!["A-001", "A-002", "A-004", "A-003"]
+        );
+        assert!(order_of(&dir, "A-002").is_some());
+        assert!(order_of(&dir, "A-004").is_some());
+    }
+
+    #[test]
+    fn same_column_move_keeps_the_rest_in_place() {
+        let dir = temp_dir("ord-same-col");
+        write_ordered(&dir, "A-001", "READY", Some("1.0"));
+        write_ordered(&dir, "A-002", "READY", Some("2.0"));
+        write_ordered(&dir, "A-003", "READY", Some("3.0"));
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-001", "A-003", "READY", &col).unwrap();
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-002", "A-003", "A-001"]);
+        assert_eq!(order_of(&dir, "A-002"), Some(2.0));
+        assert_eq!(order_of(&dir, "A-003"), Some(3.0));
+    }
+
+    #[test]
+    fn crowded_neighbours_are_renumbered_in_the_same_order() {
+        let dir = temp_dir("ord-crowded");
+        write_ordered(&dir, "A-001", "READY", Some("1.0"));
+        write_ordered(&dir, "A-002", "READY", Some("1.0005"));
+        write_ordered(&dir, "A-003", "OPEN", None);
+        let col = column(&dir, "READY");
+        apply_drop(&dir, "A-003", "A-001", "READY", &col).unwrap();
+        assert_eq!(ids(&column(&dir, "READY")), vec!["A-001", "A-003", "A-002"]);
+        assert_eq!(order_of(&dir, "A-001"), Some(1.0));
+        assert_eq!(order_of(&dir, "A-003"), Some(2.0));
+        assert_eq!(order_of(&dir, "A-002"), Some(3.0));
+    }
+
+    #[test]
+    fn a_missing_dragged_file_changes_nothing() {
+        let dir = temp_dir("ord-missing");
+        write_ordered(&dir, "A-001", "READY", Some("1.0"));
+        let col = column(&dir, "READY");
+        assert!(apply_drop(&dir, "A-999", "", "READY", &col).is_err());
+        assert_eq!(order_of(&dir, "A-001"), Some(1.0));
+    }
+
+    fn template_file(dir: &Path) -> std::path::PathBuf {
+        let p = dir.join("_template.md");
+        fs::write(
+            &p,
+            "---\nid: SB-000\ntitle: Short imperative title (≤ 100 characters)\nstatus: OPEN\ntype: feature\npriority: must\nmilestone: M1\ndependencies: []\nreferences:\n  adrs: []\n---\n\n## Description\n",
+        )
+        .unwrap();
+        p
+    }
+
+    #[test]
+    fn a_ticket_created_in_the_gui_goes_to_the_bottom_of_open() {
+        let dir = temp_dir("ord-create");
+        let tpl_dir = temp_dir("ord-create-tpl");
+        let template = template_file(&tpl_dir);
+        write_ordered(&dir, "SB-001", "OPEN", Some("2.0"));
+        write_ordered(&dir, "SB-002", "OPEN", None);
+        write_ordered(&dir, "SB-003", "READY", Some("1.0"));
+        let open = column(&dir, "OPEN");
+        create_ticket_in_column("SB-004", &dir, &template, &open).unwrap();
+        assert!(order_of(&dir, "SB-004").is_some());
+        assert_eq!(ids(&column(&dir, "OPEN")), vec!["SB-001", "SB-002", "SB-004"]);
+        // The unordered ticket above it got a number so the view matches the files.
+        assert!(order_of(&dir, "SB-002").is_some());
+    }
+
+    #[test]
+    fn a_ticket_created_in_an_empty_open_column_is_ordered() {
+        let dir = temp_dir("ord-create-empty");
+        let tpl_dir = temp_dir("ord-create-empty-tpl");
+        let template = template_file(&tpl_dir);
+        create_ticket_in_column("SB-001", &dir, &template, &[]).unwrap();
+        assert_eq!(order_of(&dir, "SB-001"), Some(1.0));
+    }
+
+    #[test]
+    fn a_ticket_made_from_the_template_alone_stays_unordered() {
+        let dir = temp_dir("ord-tpl-only");
+        let tpl_dir = temp_dir("ord-tpl-only-tpl");
+        let template = template_file(&tpl_dir);
+        create_ticket("SB-001", &dir, &template).unwrap();
+        assert_eq!(order_of(&dir, "SB-001"), None);
+    }
+
+    #[test]
+    fn writers_keep_the_closing_delimiter_on_its_own_line() {
+        let dir = temp_dir("ord-delims");
+        write_ordered(&dir, "A-001", "OPEN", Some("1.0"));
+        let path = dir.join("A-001.md");
+
+        write_order(&path, 7.0).unwrap();
+        write_status(&path, "READY").unwrap();
+        write_status_and_order(&path, "DONE", 9.0).unwrap();
+        write_fields(
+            &path,
+            &EditFields {
+                title: "New".into(),
+                priority: "should".into(),
+                ticket_type: "bug".into(),
+                milestone: "M2".into(),
+                body: "Body text".into(),
+            },
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\n---\n"), "closing delimiter on its own line: {:?}", text);
+        assert!(!text.contains("---\n---"), "no doubled delimiter: {:?}", text);
+        let t = parse_ticket(&path).unwrap();
+        assert_eq!(t.frontmatter.status, "DONE");
+        assert_eq!(t.frontmatter.order, Some(9.0));
+        assert_eq!(t.frontmatter.title, "New");
+        assert_eq!(t.body, "Body text");
+    }
+
+    #[test]
+    fn writing_an_order_adds_the_key_when_the_ticket_has_none() {
+        let dir = temp_dir("ord-add-key");
+        write_ordered(&dir, "A-001", "OPEN", None);
+        let path = dir.join("A-001.md");
+        write_order(&path, 3.0).unwrap();
+        assert_eq!(order_of(&dir, "A-001"), Some(3.0));
+        assert_eq!(parse_ticket(&path).unwrap().body, "body");
     }
 }
