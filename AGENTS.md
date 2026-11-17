@@ -44,7 +44,7 @@ Before adding any new dependency, verify it is appropriate for this project's co
 - **UI framework**: Slint. All UI is defined in `.slint` files. No alternative UI frameworks.
 - **App source lives in `qctrl/`** (standard Cargo workspace at the repo root). The compiled binary lands at the repo root as `qctrl-app`.
 - **Binary is never committed**. It is built locally via `just build` / `just release`, or downloaded from GitHub Releases.
-- **CWD convention**: the app always runs from the repo root. All file paths (`backlog/items/`, `backlog/archive/`, etc.) are resolved relative to the directory containing the `qctrl-app` binary.
+- **Project root**: the folder the app is started from (the working directory), as in `git`. All file paths (`backlog/items/`, `backlog/archive/`, etc.) are resolved relative to it, never relative to the binary's location. See ADR-0002.
 - **No database**. All state is read from and written to Markdown files with YAML frontmatter in `backlog/items/` and `backlog/archive/`. Do not introduce SQLite or any other storage layer without an ADR.
 - **User config** goes to `~/.config/qctrl/config.toml`. Never write config into the repo directory.
 - Before adding any dependency, check that it compiles on both macOS and Linux. Prefer crates with no system library dependencies unless unavoidable.

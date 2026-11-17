@@ -36,18 +36,28 @@ Download the latest binary for your platform from the [Releases](../../releases)
 | Linux (x86_64) | `qctrl-linux` |
 | Windows (x86_64) | `qctrl-windows.exe` |
 
-Place the binary at the root of your Scaffold project and make it executable:
+Rename the file to `qctrl`, make it executable, and put it in a folder on your PATH, such as `~/.local/bin` or `/usr/local/bin`:
 
 ```bash
 # macOS / Linux
 chmod +x qctrl-macos
-mv qctrl-macos qctrl-app
-./qctrl-app
+mv qctrl-macos ~/.local/bin/qctrl
 ```
+
+On Windows, rename the file to `qctrl.exe` and put it in a folder on your PATH.
 
 > **macOS note:** Gatekeeper will warn on first launch because the binary is unsigned. Right-click → Open → Open to bypass it once.
 
-Q-CTRL must be launched from your project root — it looks for `backlog/items/` relative to its own location.
+## Usage
+
+Go to the root of your Scaffold project and run it:
+
+```bash
+cd my-project
+qctrl
+```
+
+Q-CTRL uses the folder you start it from as the project root. If that folder has no `backlog/items/`, it prints a message and exits. A copy of the binary placed at the project root also works, as long as you start it from there (`./qctrl`).
 
 ---
 
@@ -63,7 +73,7 @@ just release     # release build → same
 just run         # build + launch immediately
 ```
 
-The compiled binary lands at the repo root as `qctrl-app`. To use it with a Scaffold project, copy or symlink it to that project's root.
+The compiled binary lands at the repo root as `qctrl-app`. The `-app` suffix keeps it apart from the `qctrl/` source folder, and it only applies here. To use your build with another Scaffold project, copy it to a folder on your PATH as `qctrl`, then run `qctrl` from that project's root.
 
 ---
 

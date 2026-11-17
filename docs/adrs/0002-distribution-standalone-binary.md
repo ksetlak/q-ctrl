@@ -54,7 +54,8 @@ Builds for all three platforms are automated via GitHub Actions on `git tag` pus
 
 ## Open Questions
 
-- `repo_root()` in `main.rs` currently walks up from the executable path, which is only correct for debug builds. This must be replaced with a `std::env::current_dir()`-based approach before the first release — with a folder-picker fallback for when Q-CTRL is launched from outside a Scaffold project (e.g. double-clicked from Finder). A separate ADR or backlog item should capture this.
+- **Resolved:** the project root is now the working directory Q-CTRL is started from (`project_root()` in `main.rs`), not the folder the binary sits in. Outside a folder with `backlog/items/`, it prints a message and exits.
+- **Still open:** a folder-picker fallback for when Q-CTRL is launched outside a project, for example double-clicked from Finder. Until it exists, Finder launches exit with the message above. A separate ADR or backlog item should capture this.
 
 ## Related Decisions
 

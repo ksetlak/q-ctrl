@@ -7,19 +7,16 @@ use log::{debug, info, warn};
 
 slint::include_modules!();
 
-fn repo_root() -> PathBuf {
-    let exe = std::env::current_exe().expect("Cannot determine executable path");
-    info!("Executable path: {:?}", exe);
+/// The project root is the folder Q-CTRL was started from, the same way `git`
+/// or `just` work. The binary itself can live anywhere: on PATH, in Downloads,
+/// or at the project root.
+fn project_root() -> PathBuf {
+    std::env::current_dir().expect("Cannot determine the current working directory")
+}
 
-    // The distributed binary lives at the repo root (placed there by `just build`
-    // or `just release`). Its parent is therefore the repo root itself.
-    let root = exe
-        .parent()
-        .expect("Cannot determine repo root from executable path")
-        .to_path_buf();
-
-    info!("Resolved repo root: {:?}", root);
-    root
+/// A Scaffold project has a `backlog/items/` folder at its root.
+fn is_project(root: &std::path::Path) -> bool {
+    root.join("backlog").join("items").is_dir()
 }
 
 fn priority_colour(priority: &str) -> slint::Color {
@@ -83,23 +80,39 @@ fn resolve_project_key(answers_path: &std::path::Path, tickets: &[Ticket]) -> St
 }
 
 fn main() {
-    // Always write logs to qctrl-debug.log next to the binary, regardless of
-    // how the app was launched (Finder, terminal, just run, etc.).
-    let log_path = repo_root().join("qctrl-debug.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true).append(true)
-        .open(&log_path)
-        .expect("Cannot open log file");
+    let root = project_root();
 
-    env_logger::Builder::from_env(
+    // Logs go to qctrl-debug.log in the project root (gitignored), but only
+    // inside a Scaffold project, so Q-CTRL never leaves a log in a random folder.
+    let log_target = if is_project(&root) {
+        std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .open(root.join("qctrl-debug.log"))
+            .ok()
+            .map(|f| env_logger::Target::Pipe(Box::new(f)))
+    } else {
+        None
+    };
+
+    let mut logger = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("debug")
-    )
-    .target(env_logger::Target::Pipe(Box::new(log_file)))
-    .init();
+    );
+    if let Some(target) = log_target {
+        logger.target(target);
+    }
+    logger.init();
 
-    info!("Scaffold Backlog starting");
+    info!("Q-CTRL starting");
+    info!("Project root: {:?}", root);
 
-    let root = repo_root();
+    if !is_project(&root) {
+        eprintln!(
+            "qctrl: no backlog/items/ folder in {}.\nRun qctrl from the root of a Scaffold project.",
+            root.display()
+        );
+        std::process::exit(1);
+    }
+
     let items_dir = root.join("backlog").join("items");
     let archive_dir = root.join("backlog").join("archive");
     let template_path = root.join("backlog").join("_template.md");
