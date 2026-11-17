@@ -1,0 +1,98 @@
+# Builds Q-CTRL for each platform and publishes a draft GitHub release.
+#
+# Push a tag such as v0.1.0 (or v0.1.0-rc1) to build and create a draft release.
+# Run it by hand from the Actions tab to build and test without releasing:
+# the binaries are attached to the run instead.
+#
+# See docs/adrs/0002-distribution-standalone-binary.md for the naming and
+# platform decisions.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14 # Apple Silicon
+            asset: qctrl-macos-aarch64
+          - os: ubuntu-22.04
+            asset: qctrl-linux-x86_64
+          # Windows comes once the two above work:
+          # - os: windows-2022
+          #   asset: qctrl-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: qctrl
+
+      # Slint needs a few system libraries to build on Linux. If the first run
+      # asks for more, add them here. AGENTS.md requires an ADR when a system
+      # library is needed, so record it there too.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev
+
+      - name: Test
+        working-directory: qctrl
+        run: cargo test --locked
+
+      - name: Build
+        working-directory: qctrl
+        run: cargo build --release --locked
+
+      - name: Name the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp qctrl/target/release/qctrl "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Create draft release
+    # Only for tag pushes. Manual runs stop after the build.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A draft, so you can write the release notes and publish it yourself.
+      # A tag with a suffix, like v0.1.0-rc1, is marked as a pre-release.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags="--draft --verify-tag --title $TAG"
+          case "$TAG" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$TAG" dist/* $flags --repo "${{ github.repository }}" --generate-notes

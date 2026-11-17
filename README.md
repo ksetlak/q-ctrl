@@ -32,16 +32,20 @@ Download the latest binary for your platform from the [Releases](../../releases)
 
 | Platform | File |
 |----------|------|
-| macOS (Apple Silicon / Intel) | `qctrl-macos` |
-| Linux (x86_64) | `qctrl-linux` |
-| Windows (x86_64) | `qctrl-windows.exe` |
+| macOS (Apple Silicon) | `qctrl-macos-aarch64` |
+| Linux (x86_64) | `qctrl-linux-x86_64` |
+| Windows (x86_64) | `qctrl-windows-x86_64.exe` (not published yet) |
 
 Rename the file to `qctrl`, make it executable, and put it in a folder on your PATH, such as `~/.local/bin` or `/usr/local/bin`:
 
 ```bash
-# macOS / Linux
-chmod +x qctrl-macos
-mv qctrl-macos ~/.local/bin/qctrl
+# macOS (Apple Silicon)
+chmod +x qctrl-macos-aarch64
+mv qctrl-macos-aarch64 ~/.local/bin/qctrl
+
+# Linux (x86_64)
+chmod +x qctrl-linux-x86_64
+mv qctrl-linux-x86_64 ~/.local/bin/qctrl
 ```
 
 On Windows, rename the file to `qctrl.exe` and put it in a folder on your PATH.
